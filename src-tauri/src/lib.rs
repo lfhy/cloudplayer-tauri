@@ -16,7 +16,7 @@ mod qrc_des;
 mod lyric_qq;
 mod lyric_kugou;
 mod lyric_replace;
-mod pjmp3;
+mod music_catalog;
 mod rate_limiter;
 mod share_link;
 
@@ -122,6 +122,7 @@ pub fn run() {
                 client,
                 limiter: Arc::new(rate_limiter::RateLimiter::new(45)),
                 download_tx,
+                catalog: Arc::new(music_catalog::CatalogService::new()),
             }));
 
             #[cfg(desktop)]

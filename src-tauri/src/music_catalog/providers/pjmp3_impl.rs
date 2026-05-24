@@ -39,7 +39,7 @@ use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde::Serialize;
 
-use crate::config::BASE_URL;
+pub const PJMP3_BASE_URL: &str = "https://pjmp3.com";
 
 const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -94,12 +94,12 @@ pub fn normalize_image_url(url: Option<&str>) -> Option<String> {
         return Some(format!("https:{u}"));
     }
     if u.starts_with('/') {
-        return Some(format!("{}{}", BASE_URL.trim_end_matches('/'), u));
+        return Some(format!("{}{}", PJMP3_BASE_URL.trim_end_matches('/'), u));
     }
     if u.starts_with("http://") || u.starts_with("https://") {
         return Some(u.to_string());
     }
-    Some(format!("{}/{}", BASE_URL.trim_end_matches('/'), u.trim_start_matches('/')))
+    Some(format!("{}/{}", PJMP3_BASE_URL.trim_end_matches('/'), u.trim_start_matches('/')))
 }
 
 fn split_title_speed_suffix(title: &str) -> Option<(String, String)> {
@@ -382,7 +382,7 @@ pub async fn search_pjmp3(
     keyword: &str,
     page: u32,
 ) -> Result<(Vec<SearchResultDto>, bool), String> {
-    let url = format!("{}/search.php", BASE_URL.trim_end_matches('/'));
+    let url = format!("{}/search.php", PJMP3_BASE_URL.trim_end_matches('/'));
     let page_s = page.to_string();
     let body = client
         .get(&url)
@@ -391,7 +391,7 @@ pub async fn search_pjmp3(
             "User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         )
-        .header("Referer", format!("{}/", BASE_URL))
+        .header("Referer", format!("{}/", PJMP3_BASE_URL))
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         .send()
         .await
@@ -440,13 +440,13 @@ pub fn preview_cache_path_if_exists(song_id: &str) -> Option<PathBuf> {
 async fn fetch_song_page_html_once(client: &reqwest::Client, sid: &str) -> Result<String, String> {
     let url = format!(
         "{}/song.php?id={}",
-        BASE_URL.trim_end_matches('/'),
+        PJMP3_BASE_URL.trim_end_matches('/'),
         sid
     );
     let resp = match client
         .get(&url)
         .header("User-Agent", BROWSER_UA)
-        .header("Referer", format!("{}/", BASE_URL))
+        .header("Referer", format!("{}/", PJMP3_BASE_URL))
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         .send()
         .await
@@ -663,7 +663,7 @@ async fn download_mp3_bytes(
     mp3_url: &str,
     song_page: &str,
 ) -> Result<Vec<u8>, String> {
-    let base = BASE_URL.trim_end_matches('/');
+    let base = PJMP3_BASE_URL.trim_end_matches('/');
     let ref_home = format!("{}/", base);
 
     let attempts: Vec<(Option<String>, Option<&str>)> = vec![
@@ -829,7 +829,7 @@ pub async fn cache_preview_audio_file(client: &reqwest::Client, song_id: &str) -
     let safe: String = sid.chars().filter(|c| c.is_ascii_digit()).collect();
     let name = if safe.is_empty() { "unknown".to_string() } else { safe };
 
-    let song_page = format!("{}/song.php?id={}", BASE_URL.trim_end_matches('/'), sid);
+    let song_page = format!("{}/song.php?id={}", PJMP3_BASE_URL.trim_end_matches('/'), sid);
 
     const ROUNDS: u32 = 6;
     let mut last_attempt_err = String::new();
@@ -994,7 +994,7 @@ async fn download_text_with_song_referer(
     url: &str,
     song_page: &str,
 ) -> Result<String, String> {
-    let base = BASE_URL.trim_end_matches('/');
+    let base = PJMP3_BASE_URL.trim_end_matches('/');
     let attempts: Vec<(String, Option<&str>)> = vec![
         (song_page.to_string(), Some(base)),
         (song_page.to_string(), None),
@@ -1042,7 +1042,7 @@ pub async fn fetch_song_lrc_text(client: &reqwest::Client, song_id: &str) -> Res
         return Err("无效的歌曲 ID".to_string());
     }
     eprintln!("[lyrics] pjmp3 fetch_song_lrc_text song_id={sid}");
-    let song_page = format!("{}/song.php?id={}", BASE_URL.trim_end_matches('/'), sid);
+    let song_page = format!("{}/song.php?id={}", PJMP3_BASE_URL.trim_end_matches('/'), sid);
     let html = fetch_song_page_html(client, sid).await?;
     let urls = extract_lrc_urls(&html);
     eprintln!("[lyrics] pjmp3 extracted {} .lrc url(s)", urls.len());

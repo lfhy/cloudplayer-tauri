@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::State;
 
 use super::AppState;
-use crate::pjmp3::SearchResultDto;
+use crate::music_catalog::SearchResultDto;
 
 #[derive(Serialize)]
 pub struct SearchResponse {
@@ -24,8 +24,14 @@ pub async fn search_songs(
     }
     state.limiter.acquire_slot().await;
     let p = page.max(1);
-    let (results, has_next) = crate::pjmp3::search_pjmp3(&state.client, kw, p).await?;
-    Ok(SearchResponse { results, has_next })
+    let page_result = state
+        .catalog
+        .search(&state.client, kw, p)
+        .await?;
+    Ok(SearchResponse {
+        results: page_result.results,
+        has_next: page_result.has_next,
+    })
 }
 
 #[tauri::command]
@@ -35,10 +41,7 @@ pub async fn get_preview_url(state: State<'_, Arc<AppState>>, song_id: String) -
         return Err("无效的歌曲 ID".to_string());
     }
     state.limiter.acquire_slot().await;
-    let url = crate::pjmp3::fetch_preview_url(&state.client, sid)
-        .await?
-        .ok_or_else(|| "未解析到 MP3 试听地址".to_string())?;
-    Ok(url)
+    state.catalog.fetch_preview_url(&state.client, sid).await
 }
 
 /// 下载试听到本地临时文件并返回路径，供前端 `convertFileSrc` 播放（避免 WebView 无法直连外链）。
@@ -49,6 +52,6 @@ pub async fn cache_preview_for_play(state: State<'_, Arc<AppState>>, song_id: St
         return Err("无效的歌曲 ID".to_string());
     }
     state.limiter.acquire_slot().await;
-    let path = crate::pjmp3::cache_preview_audio_file(&state.client, sid).await?;
+    let path = state.catalog.cache_preview(&state.client, sid).await?;
     Ok(path.to_string_lossy().to_string())
 }

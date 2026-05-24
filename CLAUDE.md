@@ -41,7 +41,8 @@ npm run android:build:all-abis  # All Android ABIs
 | `commands.rs` | All 35 `#[tauri::command]` functions, AppState, request/response types |
 | `config.rs` | `Settings` struct → `~/.cloudplayer/settings.json`, platform-specific paths, `BASE_URL` |
 | `db.rs` | SQLite schema (7 tables), migrations, CRUD operations |
-| `pjmp3.rs` | Core search/playback engine — scrapes pjmp3.com |
+| `music_catalog/` | 在线曲库抽象层（`CatalogService` + `MusicCatalogProvider` trait） |
+| `music_catalog/providers/pjmp3_impl.rs` | Legacy pjmp3.com 搜索/试听（默认 `catalog_provider=none` 不启用） |
 | `download.rs` | Async download queue with captcha solving chain |
 | `lyrics.rs` | Lyrics types, LRC/YRC/TTML parsing, Netease/LRCLIB APIs |
 | `lyric_replace.rs` | Multi-source lyric search (QQ/Kugou/Netease/LRCLIB) |
@@ -71,7 +72,12 @@ npm run android:build:all-abis  # All Android ABIs
 
 ### Audio Playback Resolution Chain (`resolve_online_play`)
 
-Local library → downloaded tracks → download dir same-name file → preview disk cache → recently played URL → fetch new preview → direct URL fallback
+Local library → downloaded tracks → download dir same-name file → preview disk cache → recently played URL → **CatalogService** fetch preview → direct URL fallback
+
+### Online Catalog
+
+- `settings.json` → `catalog_provider`: `none` (default) | `pjmp3` (legacy, site down)
+- See [MUSIC_CATALOG.md](MUSIC_CATALOG.md) for module map and migration notes
 
 ### Lyrics Pipeline
 

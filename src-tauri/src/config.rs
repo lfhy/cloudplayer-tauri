@@ -2,9 +2,6 @@
 //!
 //! **Android** 必须在 `setup` 里先调用 [`init_android_storage`]，再打开数据库（见 `lib.rs`）。
 
-/// 与 `cloudplayer/config/settings.py` 中 `BASE_URL` 一致。
-pub const BASE_URL: &str = "https://pjmp3.com";
-
 use std::fs;
 use std::path::PathBuf;
 #[cfg(target_os = "android")]
@@ -134,6 +131,9 @@ pub struct Settings {
     /// 上次播放顺序模式（0=顺序,1=列表循环,2=单曲,3=随机）
     #[serde(default)]
     pub last_play_mode_index: i64,
+    /// 在线曲库源：`none`（默认，不可用）| `pjmp3`（legacy，站点已下线）
+    #[serde(default = "default_catalog_provider")]
+    pub catalog_provider: String,
 }
 
 fn default_volume() -> f64 {
@@ -158,6 +158,10 @@ fn default_lyrics_lrclib() -> bool {
 
 fn default_main_window_close_action() -> String {
     "ask".to_string()
+}
+
+fn default_catalog_provider() -> String {
+    "none".to_string()
 }
 
 /// 与前端设置表单一致：字符串格式见 global-hotkey 解析（如 `ctrl+alt+space`）。
@@ -221,6 +225,7 @@ impl Default for Settings {
             last_play_queue_json: String::new(),
             last_play_index: 0,
             last_play_mode_index: 0,
+            catalog_provider: default_catalog_provider(),
         }
     }
 }

@@ -1,6 +1,7 @@
 //! 与 Python `services/download_service.py` 对齐：顺序队列、captcha 链、流式落盘。
 
 use std::error::Error;
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
 use crate::captcha_slider::solve_tianai_slider;
-use crate::config::{default_download_dir, Settings, BASE_URL};
+use crate::config::{default_download_dir, Settings};
+use crate::music_catalog::providers::pjmp3_impl::PJMP3_BASE_URL;
+use crate::music_catalog::{PROVIDER_PJMP3};
 
 const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -45,6 +48,7 @@ fn persist_downloaded_record(app: &AppHandle, path: &Path, job: &DownloadJob, wr
         duration_ms,
         file_size,
         job.source_id.trim(),
+        crate::music_catalog::parse_catalog_id(&job.source_id).provider.as_str(),
         job.quality.trim(),
         completed_at,
     ) {
@@ -283,6 +287,28 @@ pub async fn run_one_job(client: Client, app: AppHandle, job: DownloadJob) {
         message: None,
     };
 
+    let catalog_track_id = {
+        let st = app.state::<Arc<crate::commands::AppState>>();
+        match st.catalog.require_download_provider(&job.source_id) {
+            Ok((provider, track_id)) => {
+                if provider.name() != PROVIDER_PJMP3 {
+                    download_fail_emit(
+                        &mut task,
+                        &emit,
+                        &job,
+                        format!("{} 的下载尚未实现", provider.name()),
+                    );
+                    return;
+                }
+                track_id
+            }
+            Err(e) => {
+                download_fail_emit(&mut task, &emit, &job, e);
+                return;
+            }
+        }
+    };
+
     if let Err(e) = check_and_reserve_download_slot() {
         download_fail_emit(&mut task, &emit, &job, e);
         return;
@@ -292,8 +318,9 @@ pub async fn run_one_job(client: Client, app: AppHandle, job: DownloadJob) {
     emit(task.clone());
     emit_download_step(&mut task, &emit, 0.04, "准备下载（验证码）…");
 
-    let base = BASE_URL.trim_end_matches('/');
-    let song_page = format!("{}/song.php?id={}", base, job.source_id);
+    let base = PJMP3_BASE_URL.trim_end_matches('/');
+    let sid = catalog_track_id.id.trim();
+    let song_page = format!("{}/song.php?id={}", base, sid);
 
     // tianai-captcha TTL 很短且每个 id 只能校验一次；遇到 `已失效`/`基础校验失败` 时重新 gen。
     const CAPTCHA_MAX_ATTEMPTS: usize = 4;
@@ -481,7 +508,7 @@ pub async fn run_one_job(client: Client, app: AppHandle, job: DownloadJob) {
         .get(format!("{}/captcha/check/getMusicUrl", base))
         .query(&[
             ("captchaId", captcha_id.as_str()),
-            ("id", job.source_id.as_str()),
+            ("id", sid),
             ("br", job.quality.as_str()),
         ])
         .header("User-Agent", BROWSER_UA)
@@ -695,7 +722,7 @@ pub async fn fetch_full_music_url(
         "320" | "hq" => "320",
         _ => "128",
     };
-    let base = BASE_URL.trim_end_matches('/');
+    let base = PJMP3_BASE_URL.trim_end_matches('/');
     let song_page = format!("{}/song.php?id={}", base, sid);
 
     const MAX_ATTEMPTS: usize = 4;

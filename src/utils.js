@@ -155,6 +155,20 @@ export function formatLoadingSubtitle(track) {
   return `${base} · ${track?.local_path ? "正在加载本地文件…" : "正在拉取音频…"}`;
 }
 
+// ── 曲库 id 归一化 ──
+
+/** @param {Record<string, unknown>} r */
+export function catalogIdFromRow(r) {
+  return String(
+    r.source_id ?? r.sourceId ?? r.catalog_id ?? r.catalogId ?? r.pjmp3_source_id ?? r.pjmp3SourceId ?? "",
+  ).trim();
+}
+
+/** @param {Record<string, unknown>} r */
+export function catalogProviderFromRow(r) {
+  return String(r.catalog_provider ?? r.catalogProvider ?? "").trim();
+}
+
 // ── 表格标题列 ──
 
 /**
@@ -164,7 +178,7 @@ export function formatLoadingSubtitle(track) {
  */
 export function discoverPlaylistTitleCellHtml(r, opts = {}) {
   const titleFallback = opts.titleFallback ?? "—";
-  const sid = String(r.source_id ?? r.pjmp3_source_id ?? "").trim();
+  const sid = catalogIdFromRow(r);
   const showDl = sid && appState.downloadedSourceIds.has(sid);
   const hasTitle = r.title != null && String(r.title).trim() !== "";
   const titleLine = `<span class="t-title">${escapeHtml(hasTitle ? String(r.title) : titleFallback)}</span>`;
@@ -195,7 +209,7 @@ export function searchResultToQueueItem(r) {
 /** 导入歌单行 → 队列项（可无曲库 id，播放时会尝试 `try_fill_playlist_item_source_id`） */
 export function playlistImportRowToQueueItem(r) {
   return {
-    source_id: (r.pjmp3_source_id || "").trim(),
+    source_id: catalogIdFromRow(r),
     title: r.title,
     artist: r.artist || "",
     album: r.album || "",
@@ -224,7 +238,7 @@ export function downloadedSongRowToQueueItem(r) {
     album: r.album || "",
     local_path: fp,
     cover_url: null,
-    source_id: String(r.pjmp3_source_id ?? r.pjmp3SourceId ?? "").trim() || undefined,
+    source_id: catalogIdFromRow(r) || undefined,
   };
 }
 
@@ -233,7 +247,7 @@ export function downloadedSongRowToQueueItem(r) {
  */
 export function buildPlaylistImportItem(track = {}) {
   const sid = String(
-    track.sourceId ?? track.source_id ?? track.pjmp3_source_id ?? ""
+    track.sourceId ?? track.source_id ?? track.catalog_id ?? track.catalogId ?? track.pjmp3_source_id ?? "",
   ).trim();
   const cover = String(track.coverUrl ?? track.cover_url ?? "").trim();
   const playUrl = String(track.playUrl ?? track.play_url ?? "").trim();
@@ -286,7 +300,7 @@ export async function refreshDownloadedSourceIdSet() {
     const rows = await invoke("list_downloaded_songs");
     appState.downloadedSourceIds = new Set(
       (rows || [])
-        .map((r) => String(r.pjmp3SourceId ?? r.pjmp3_source_id ?? "").trim())
+        .map((r) => catalogIdFromRow(r))
         .filter(Boolean),
     );
   } catch {

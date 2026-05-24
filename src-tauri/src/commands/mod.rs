@@ -12,6 +12,7 @@ pub mod util_cmd;
 
 use std::sync::Arc;
 
+use crate::music_catalog::CatalogService;
 use crate::rate_limiter::RateLimiter;
 
 /// HTTP 客户端与搜索限速（与 Python 侧行为接近，避免短时间大量请求）。
@@ -20,6 +21,7 @@ pub struct AppState {
     pub client: reqwest::Client,
     pub limiter: Arc<RateLimiter>,
     pub download_tx: tokio::sync::mpsc::Sender<crate::download::DownloadJob>,
+    pub catalog: Arc<CatalogService>,
 }
 
 // Commands are referenced via full paths in lib.rs (e.g. `commands::settings_cmd::get_settings`).

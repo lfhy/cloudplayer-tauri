@@ -184,7 +184,7 @@ pub async fn resolve_online_play(
     }
 
     // 2) 试听磁盘缓存
-    if let Some(p) = crate::pjmp3::preview_cache_path_if_exists(sid) {
+    if let Some(p) = crate::music_catalog::CatalogService::preview_cache_path_if_exists(sid) {
         let path_str = p.to_string_lossy().to_string();
         info!(
             target: "pj-play",
@@ -228,7 +228,11 @@ pub async fn resolve_online_play(
     }
 
     state.limiter.acquire_slot().await;
-    let err_preview = match crate::pjmp3::cache_preview_audio_file(&state.client, sid).await {
+    let err_preview = match state
+        .catalog
+        .cache_preview(&state.client, sid)
+        .await
+    {
         Ok(p) => {
             let path_str = p.to_string_lossy().to_string();
             info!(
@@ -258,8 +262,8 @@ pub async fn resolve_online_play(
     );
 
     state.limiter.acquire_slot().await;
-    match crate::pjmp3::fetch_preview_url(&state.client, sid).await {
-        Ok(Some(url)) => {
+    match state.catalog.fetch_preview_url(&state.client, sid).await {
+        Ok(url) => {
             let u = url.trim();
             if !u.is_empty() {
                 let u_owned = u.to_string();
@@ -278,17 +282,6 @@ pub async fn resolve_online_play(
                     via: "direct_url".to_string(),
                 });
             }
-            let msg = format!("{err_preview}；直链降级：未解析到 MP3 地址");
-            warn!(
-                target: "pj-play",
-                "resolve_online_play fail sid={} elapsed_ms={} err={}",
-                sid,
-                t0.elapsed().as_millis(),
-                msg
-            );
-            Err(msg)
-        }
-        Ok(None) => {
             let msg = format!("{err_preview}；直链降级：未解析到 MP3 地址");
             warn!(
                 target: "pj-play",

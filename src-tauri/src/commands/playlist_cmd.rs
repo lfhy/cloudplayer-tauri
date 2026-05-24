@@ -8,6 +8,8 @@ use rusqlite::OptionalExtension;
 use super::AppState;
 use crate::db::DbState;
 use crate::import_enrich;
+use crate::music_catalog::parse_catalog_id;
+use crate::music_catalog::PROVIDER_PJMP3;
 
 #[derive(Debug, Deserialize)]
 pub struct ImportItemIn {
@@ -51,7 +53,10 @@ pub struct PlaylistImportItemRow {
     pub title: String,
     pub artist: String,
     pub album: String,
+    #[serde(alias = "catalog_id", alias = "catalogId")]
     pub pjmp3_source_id: String,
+    #[serde(default)]
+    pub catalog_provider: String,
     pub cover_url: String,
     pub duration_ms: i64,
 }
@@ -108,7 +113,7 @@ pub fn list_playlists_summary(state: State<'_, DbState>) -> Result<Vec<PlaylistS
 pub fn list_playlist_import_items(state: State<'_, DbState>, playlist_id: i64) -> Result<Vec<PlaylistImportItemRow>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare(r#"SELECT id, sort_order, title, artist, album, pjmp3_source_id, cover_url, duration_ms
+        .prepare(r#"SELECT id, sort_order, title, artist, album, pjmp3_source_id, catalog_provider, cover_url, duration_ms
                FROM playlist_import_items WHERE playlist_id=?1 ORDER BY sort_order ASC, id ASC"#)
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -120,8 +125,9 @@ pub fn list_playlist_import_items(state: State<'_, DbState>, playlist_id: i64) -
                 artist: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
                 album: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
                 pjmp3_source_id: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                cover_url: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                duration_ms: r.get(7)?,
+                catalog_provider: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                cover_url: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                duration_ms: r.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -166,15 +172,26 @@ pub fn delete_playlist_import_item(state: State<'_, DbState>, playlist_id: i64, 
     Ok(())
 }
 
+fn catalog_provider_for_item(source_id: &str) -> String {
+    let parsed = parse_catalog_id(source_id);
+    if parsed.provider != PROVIDER_PJMP3 && !parsed.provider.is_empty() {
+        parsed.provider
+    } else {
+        crate::music_catalog::CatalogService::active_provider_name()
+    }
+}
+
 #[tauri::command]
 pub fn replace_playlist_import_items(app: AppHandle, state: State<'_, DbState>, playlist_id: i64, items: Vec<ImportItemIn>) -> Result<(), String> {
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM playlist_import_items WHERE playlist_id=?1", [playlist_id]).map_err(|e| e.to_string())?;
     for (i, t) in items.iter().enumerate() {
+        let sid = t.source_id.trim();
+        let provider = catalog_provider_for_item(sid);
         tx.execute(
-            r#"INSERT INTO playlist_import_items (playlist_id, sort_order, title, artist, album, play_url, pjmp3_source_id, cover_url, cover_cache_path, duration_ms, audio_cache_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, '')"#,
-            rusqlite::params![playlist_id, i as i64, t.title.trim(), t.artist.trim(), t.album.trim(), t.play_url.trim(), t.source_id.trim(), t.cover_url.trim(), t.duration_ms.max(0)],
+            r#"INSERT INTO playlist_import_items (playlist_id, sort_order, title, artist, album, play_url, pjmp3_source_id, catalog_provider, cover_url, cover_cache_path, duration_ms, audio_cache_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '', ?10, '')"#,
+            rusqlite::params![playlist_id, i as i64, t.title.trim(), t.artist.trim(), t.album.trim(), t.play_url.trim(), sid, provider, t.cover_url.trim(), t.duration_ms.max(0)],
         ).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -191,9 +208,11 @@ pub fn append_playlist_import_items(app: AppHandle, state: State<'_, DbState>, p
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute("UPDATE playlist_import_items SET sort_order = sort_order + ?1 WHERE playlist_id = ?2", rusqlite::params![shift, playlist_id]).map_err(|e| e.to_string())?;
     for (i, t) in items.iter().enumerate() {
+        let sid = t.source_id.trim();
+        let provider = catalog_provider_for_item(sid);
         tx.execute(
-            r#"INSERT INTO playlist_import_items (playlist_id, sort_order, title, artist, album, play_url, pjmp3_source_id, cover_url, cover_cache_path, duration_ms, audio_cache_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, '')"#,
-            rusqlite::params![playlist_id, i as i64, t.title.trim(), t.artist.trim(), t.album.trim(), t.play_url.trim(), t.source_id.trim(), t.cover_url.trim(), t.duration_ms.max(0)],
+            r#"INSERT INTO playlist_import_items (playlist_id, sort_order, title, artist, album, play_url, pjmp3_source_id, catalog_provider, cover_url, cover_cache_path, duration_ms, audio_cache_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '', ?10, '')"#,
+            rusqlite::params![playlist_id, i as i64, t.title.trim(), t.artist.trim(), t.album.trim(), t.play_url.trim(), sid, provider, t.cover_url.trim(), t.duration_ms.max(0)],
         ).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())?;

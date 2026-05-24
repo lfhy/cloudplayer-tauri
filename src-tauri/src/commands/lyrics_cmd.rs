@@ -17,7 +17,7 @@ pub async fn fetch_song_lrc(
     }
     eprintln!("[lyrics] command fetch_song_lrc song_id={sid}");
     state.limiter.acquire_slot().await;
-    let raw = crate::pjmp3::fetch_song_lrc_text(&state.client, sid).await?;
+    let raw = state.catalog.fetch_lrc(&state.client, sid).await?;
     Ok(raw.map(crate::lyrics::pack_lyrics_for_ui))
 }
 

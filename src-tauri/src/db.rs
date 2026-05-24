@@ -60,6 +60,7 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
             album TEXT NOT NULL DEFAULT '',
             play_url TEXT NOT NULL DEFAULT '',
             pjmp3_source_id TEXT NOT NULL DEFAULT '',
+            catalog_provider TEXT NOT NULL DEFAULT 'pjmp3',
             cover_url TEXT NOT NULL DEFAULT '',
             cover_cache_path TEXT NOT NULL DEFAULT '',
             duration_ms INTEGER NOT NULL DEFAULT 0,
@@ -73,7 +74,8 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
             title TEXT NOT NULL DEFAULT '',
             artist TEXT NOT NULL DEFAULT '',
             album TEXT NOT NULL DEFAULT '',
-            pjmp3_source_id TEXT NOT NULL DEFAULT ''
+            pjmp3_source_id TEXT NOT NULL DEFAULT '',
+            catalog_provider TEXT NOT NULL DEFAULT 'pjmp3'
         );
 
         CREATE TABLE IF NOT EXISTS recent_plays (
@@ -83,6 +85,7 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
             artist TEXT NOT NULL DEFAULT '',
             cover_url TEXT,
             pjmp3_source_id TEXT,
+            catalog_provider TEXT NOT NULL DEFAULT 'pjmp3',
             file_path TEXT,
             play_url TEXT NOT NULL DEFAULT '',
             played_at INTEGER NOT NULL
@@ -98,6 +101,7 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
             duration_ms INTEGER NOT NULL DEFAULT 0,
             file_size INTEGER NOT NULL DEFAULT 0,
             pjmp3_source_id TEXT NOT NULL DEFAULT '',
+            catalog_provider TEXT NOT NULL DEFAULT 'pjmp3',
             quality TEXT NOT NULL DEFAULT '',
             completed_at INTEGER NOT NULL
         );
@@ -117,6 +121,10 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
         "ALTER TABLE playlist_import_items ADD COLUMN audio_cache_path TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE recent_plays ADD COLUMN play_url TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE playlists ADD COLUMN is_favorites INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE playlist_import_items ADD COLUMN catalog_provider TEXT NOT NULL DEFAULT 'pjmp3'",
+        "ALTER TABLE liked_tracks ADD COLUMN catalog_provider TEXT NOT NULL DEFAULT 'pjmp3'",
+        "ALTER TABLE recent_plays ADD COLUMN catalog_provider TEXT NOT NULL DEFAULT 'pjmp3'",
+        "ALTER TABLE downloaded_tracks ADD COLUMN catalog_provider TEXT NOT NULL DEFAULT 'pjmp3'",
     ] {
         let _ = conn.execute(stmt, []);
     }
@@ -134,6 +142,7 @@ pub fn insert_downloaded_track(
     duration_ms: i64,
     file_size: i64,
     pjmp3_source_id: &str,
+    catalog_provider: &str,
     quality: &str,
     completed_at_ms: i64,
 ) -> rusqlite::Result<()> {
@@ -141,8 +150,8 @@ pub fn insert_downloaded_track(
         r#"
         INSERT INTO downloaded_tracks (
             file_path, title, artist, album, duration_ms, file_size,
-            pjmp3_source_id, quality, completed_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            pjmp3_source_id, catalog_provider, quality, completed_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ON CONFLICT(file_path) DO UPDATE SET
             title = excluded.title,
             artist = excluded.artist,
@@ -150,6 +159,7 @@ pub fn insert_downloaded_track(
             duration_ms = excluded.duration_ms,
             file_size = excluded.file_size,
             pjmp3_source_id = excluded.pjmp3_source_id,
+            catalog_provider = excluded.catalog_provider,
             quality = excluded.quality,
             completed_at = excluded.completed_at
         "#,
@@ -161,6 +171,7 @@ pub fn insert_downloaded_track(
             duration_ms,
             file_size,
             pjmp3_source_id,
+            catalog_provider,
             quality,
             completed_at_ms,
         ],
@@ -203,7 +214,10 @@ pub struct DownloadedSongRow {
     pub album: String,
     pub duration_ms: i64,
     pub file_size: i64,
+    #[serde(alias = "catalogId", alias = "catalog_id")]
     pub pjmp3_source_id: String,
+    #[serde(default)]
+    pub catalog_provider: String,
     pub quality: String,
     pub completed_at: i64,
 }
@@ -211,7 +225,7 @@ pub struct DownloadedSongRow {
 pub fn list_downloaded_tracks(conn: &Connection) -> rusqlite::Result<Vec<DownloadedSongRow>> {
     let mut stmt = conn.prepare(
         r#"SELECT file_path, title, artist, album, duration_ms, file_size,
-                  pjmp3_source_id, quality, completed_at
+                  pjmp3_source_id, catalog_provider, quality, completed_at
            FROM downloaded_tracks
            ORDER BY completed_at DESC"#,
     )?;
@@ -224,8 +238,9 @@ pub fn list_downloaded_tracks(conn: &Connection) -> rusqlite::Result<Vec<Downloa
             duration_ms: r.get(4)?,
             file_size: r.get(5)?,
             pjmp3_source_id: r.get(6)?,
-            quality: r.get(7)?,
-            completed_at: r.get(8)?,
+            catalog_provider: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+            quality: r.get(8)?,
+            completed_at: r.get(9)?,
         })
     })?;
     rows.collect()
