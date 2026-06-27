@@ -204,6 +204,18 @@ export function fillSettingsFormFromSettings(s) {
   const fontSelect = document.getElementById("setting-ly-font");
   if (fontSelect) fontSelect.value = s.desktop_lyrics_font_family ?? s.desktopLyricsFontFamily ?? "";
 
+  // 代理：前端只读 `proxy.{enabled,url,no_proxy}`（snake_case 由 Tauri 直接序列化而来）。
+  const proxyObj = s.proxy ?? null;
+  const proxyEnabled = Boolean(proxyObj?.enabled ?? proxyObj?.enabled);
+  const proxyUrl = String(proxyObj?.url ?? "").trim();
+  const proxyNoProxy = String(proxyObj?.no_proxy ?? proxyObj?.noProxy ?? "").trim();
+  const proxyEnabledEl = document.getElementById("setting-proxy-enabled");
+  if (proxyEnabledEl) proxyEnabledEl.checked = proxyEnabled;
+  const proxyUrlEl = document.getElementById("setting-proxy-url");
+  if (proxyUrlEl) proxyUrlEl.value = proxyUrl;
+  const proxyNoProxyEl = document.getElementById("setting-proxy-no-proxy");
+  if (proxyNoProxyEl) proxyNoProxyEl.value = proxyNoProxy;
+
   fillHotkeysFormFromSettings(s);
   syncSettingsFormBaselineFromDom();
   updateSettingsSaveButtonState();
@@ -237,6 +249,9 @@ function getSettingsFormValues() {
   const highlight = document.getElementById("setting-ly-highlight")?.value || "#ffb7d4";
   const neteaseApiBase = document.getElementById("setting-netease-api-base")?.value?.trim() || "";
   const fontFamily = document.getElementById("setting-ly-font")?.value || "";
+  const proxyEnabled = document.getElementById("setting-proxy-enabled")?.checked ?? false;
+  const proxyUrl = document.getElementById("setting-proxy-url")?.value?.trim() || "";
+  const proxyNoProxy = document.getElementById("setting-proxy-no-proxy")?.value?.trim() || "";
 
   const hotkeys = {};
   const defs = [
@@ -252,7 +267,7 @@ function getSettingsFormValues() {
     if (accel) hotkeys[def.key] = accel;
   }
 
-  return { action, base, highlight, neteaseApiBase, fontFamily, hotkeys };
+  return { action, base, highlight, neteaseApiBase, fontFamily, hotkeys, proxyEnabled, proxyUrl, proxyNoProxy };
 }
 
 function settingsFormIsDirty() {
@@ -263,6 +278,9 @@ function settingsFormIsDirty() {
   if (cur.highlight !== bl.highlight) return true;
   if (cur.neteaseApiBase !== bl.neteaseApiBase) return true;
   if (cur.fontFamily !== bl.fontFamily) return true;
+  if (cur.proxyEnabled !== bl.proxyEnabled) return true;
+  if (cur.proxyUrl !== bl.proxyUrl) return true;
+  if (cur.proxyNoProxy !== bl.proxyNoProxy) return true;
   const curSig = JSON.stringify(cur.hotkeys);
   return curSig !== bl.hotkeysSig;
 }
@@ -276,6 +294,9 @@ function syncSettingsFormBaselineFromDom() {
     neteaseApiBase: cur.neteaseApiBase,
     fontFamily: cur.fontFamily,
     hotkeysSig: JSON.stringify(cur.hotkeys),
+    proxyEnabled: cur.proxyEnabled,
+    proxyUrl: cur.proxyUrl,
+    proxyNoProxy: cur.proxyNoProxy,
   };
 }
 
@@ -321,7 +342,7 @@ async function runCloseChoice(choice) {
 
 export function wireSettingsFormDirtyTracking() {
   const inputs = document.querySelectorAll(
-    '.settings-form #setting-close-action, #setting-ly-base, #setting-ly-highlight, #setting-netease-api-base, #setting-ly-font'
+    '.settings-form #setting-close-action, #setting-ly-base, #setting-ly-highlight, #setting-netease-api-base, #setting-ly-font, #setting-proxy-enabled, #setting-proxy-url, #setting-proxy-no-proxy'
   );
   inputs.forEach((el) => {
     el.addEventListener("input", updateSettingsSaveButtonState);
@@ -360,10 +381,47 @@ export function wireHotkeySettingsUi() {
   });
 }
 
+
+// ── 代理生效状态 ──
+
+function renderEffectiveProxyStatus() {
+  const badge = document.getElementById("setting-proxy-source");
+  if (!badge) return;
+  const eff = appState.effectiveProxy || {};
+  let label;
+  if (eff.applied) {
+    const where = eff.normalizedUrl || eff.redactedUrl || "(empty)";
+    label = `生效中 · ${eff.source} · ${where}`;
+    badge.classList.add("is-applied");
+  } else {
+    label = `未启用 · ${eff.source || "none"}`;
+    badge.classList.remove("is-applied");
+  }
+  badge.textContent = label;
+  badge.title = eff.redactedUrl
+    ? `代理 URL：${eff.redactedUrl}\n来源：${eff.source}\nNO_PROXY：${eff.noProxy || "(空)"}`
+    : `当前进程未启用代理（来源：${eff.source || "none"}）`;
+}
+
+async function refreshEffectiveProxy() {
+  try {
+    const status = await invoke("get_proxy_status");
+    appState.effectiveProxy = status || appState.effectiveProxy;
+  } catch (e) {
+    console.warn("get_proxy_status failed:", e);
+  }
+  renderEffectiveProxyStatus();
+}
+
 export function wirePreferencesModals() {
   populateFontSelect(document.getElementById("setting-ly-font"));
   wireSettingsFormDirtyTracking();
   wireHotkeySettingsUi();
+  renderEffectiveProxyStatus();
+  void refreshEffectiveProxy();
+  document.getElementById("btn-proxy-refresh")?.addEventListener("click", () => {
+    void refreshEffectiveProxy();
+  });
 
   document.getElementById("settings-save")?.addEventListener("click", async () => {
     const cur = getSettingsFormValues();
@@ -376,11 +434,16 @@ export function wirePreferencesModals() {
           desktop_lyrics_font_family: cur.fontFamily,
           netease_api_base: cur.neteaseApiBase,
           global_hotkeys: cur.hotkeys,
+          proxy_enabled: cur.proxyEnabled,
+          proxy_url: cur.proxyUrl,
+          proxy_no_proxy: cur.proxyNoProxy,
         },
       });
       appState.mainWindowCloseAction = normalizeCloseAction(cur.action);
       syncSettingsFormBaselineFromDom();
       updateSettingsSaveButtonState();
+      // 代理变更需重启；保存后立即拉一次最新 status 让 UI 提示用户。
+      void refreshEffectiveProxy();
       for (const statusId of [
         "hk-status-play-pause",
         "hk-status-prev",

@@ -1,3 +1,4 @@
+pub mod proxy_cmd;
 pub mod settings_cmd;
 pub mod window_cmd;
 pub mod search_cmd;
@@ -22,6 +23,8 @@ pub struct AppState {
     pub limiter: Arc<RateLimiter>,
     pub download_tx: tokio::sync::mpsc::Sender<crate::download::DownloadJob>,
     pub catalog: Arc<CatalogService>,
+    /// 启动期解析的最终代理；仅用于 `get_proxy_status` 展示，运行期代理变更需要重启。
+    pub proxy: Arc<crate::proxy::EffectiveProxy>,
 }
 
 // Commands are referenced via full paths in lib.rs (e.g. `commands::settings_cmd::get_settings`).

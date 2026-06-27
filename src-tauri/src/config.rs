@@ -134,6 +134,9 @@ pub struct Settings {
     /// 在线曲库源：`none`（默认，不可用）| `pjmp3`（legacy，站点已下线）
     #[serde(default = "default_catalog_provider")]
     pub catalog_provider: String,
+    /// HTTP/HTTPS/SOCKS5 代理；CLI / 环境变量 / 配置文件的优先级见 `crate::proxy`。
+    #[serde(default)]
+    pub proxy: crate::proxy::ProxyConfig,
 }
 
 fn default_volume() -> f64 {
@@ -226,6 +229,7 @@ impl Default for Settings {
             last_play_index: 0,
             last_play_mode_index: 0,
             catalog_provider: default_catalog_provider(),
+            proxy: crate::proxy::ProxyConfig::default(),
         }
     }
 }

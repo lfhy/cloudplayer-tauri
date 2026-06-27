@@ -17,6 +17,7 @@ mod lyric_qq;
 mod lyric_kugou;
 mod lyric_replace;
 mod music_catalog;
+mod proxy;
 mod rate_limiter;
 mod share_link;
 
@@ -47,6 +48,20 @@ use crate::global_hotkeys::{dispatch_shortcut, HotkeyShortcutMap};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logging::install_panic_hook();
+
+    // 命令行代理覆盖（仅调试场景；Tauri 启动时把 argv 透传给我们的 setup 闭包不可行，
+    // 因此这里使用 std::env::args_os，从 OS argv 中抽取 --proxy / --no-proxy / --disable-proxy；
+    // --proxy / --no-proxy 仅在 macOS/Linux 桌面 / Windows 桌面生效，Tauri 移动端忽略。
+    let cli_proxy = {
+        let mut raw: Vec<String> = Vec::new();
+        for a in std::env::args_os() {
+            match a.into_string() {
+                Ok(s) => raw.push(s),
+                Err(_) => {}
+            }
+        }
+        crate::proxy::CliProxyOverride::from_env_args(&raw)
+    };
 
     // 移动端不能出现 `Option<HotkeyShortcutMap>`：该类型未导入且全局快捷键仅桌面存在。
     #[cfg(desktop)]
@@ -96,7 +111,17 @@ pub fn run() {
                 conn: std::sync::Mutex::new(conn),
             });
 
-            let client = reqwest::Client::builder()
+            // 解析最终生效的代理（CLI > 环境变量 > settings.json），写到 reqwest 客户端。
+            let settings_for_proxy = Settings::load();
+            let effective = crate::proxy::resolve_effective(&cli_proxy, &settings_for_proxy.proxy);
+            let proxy_summary = crate::proxy::status_from(&effective);
+            eprintln!(
+                "[proxy] effective source={} url={} no_proxy={}",
+                proxy_summary.source,
+                proxy_summary.redacted_url,
+                proxy_summary.no_proxy,
+            );
+            let mut builder = reqwest::Client::builder()
                 .timeout(Duration::from_secs(45))
                 .connect_timeout(Duration::from_secs(15))
                 .redirect(reqwest::redirect::Policy::limited(10))
@@ -104,7 +129,9 @@ pub fn run() {
                 .http1_only()
                 .user_agent(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                )
+                );
+            builder = crate::proxy::apply_to(builder, &effective.config);
+            let client = builder
                 .build()
                 .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))?;
 
@@ -119,10 +146,11 @@ pub fn run() {
             });
 
             app.manage(Arc::new(commands::AppState {
-                client,
+                client: client.clone(),
                 limiter: Arc::new(rate_limiter::RateLimiter::new(45)),
                 download_tx,
                 catalog: Arc::new(music_catalog::CatalogService::new()),
+                proxy: Arc::new(effective),
             }));
 
             #[cfg(desktop)]
@@ -196,6 +224,8 @@ pub fn run() {
             commands::settings_cmd::validate_accelerator,
             commands::settings_cmd::get_default_download_dir,
             commands::settings_cmd::save_settings,
+            commands::proxy_cmd::get_proxy_status,
+            commands::proxy_cmd::validate_proxy,
             commands::window_cmd::set_desktop_lyrics_click_through,
             commands::window_cmd::hide_main_window,
             commands::window_cmd::show_main_window,

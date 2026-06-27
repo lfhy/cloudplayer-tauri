@@ -88,6 +88,23 @@ export const appState = {
     fontFamily: "",
     neteaseApiBase: "",
     hotkeysSig: "",
+    proxyEnabled: false,
+    proxyUrl: "",
+    proxyNoProxy: "",
+  },
+  /** 当前进程内实际生效的代理（启动期由 `get_proxy_status` 拉取一次），用于 UI 提示。 */
+  effectiveProxy: {
+    applied: false,
+    source: "none",
+    redactedUrl: "",
+    normalizedUrl: "",
+    scheme: "",
+    host: "",
+    port: 0,
+    username: "",
+    hasPassword: false,
+    noProxy: "",
+    appliedAtMs: 0,
   },
 
   // ── 右键菜单 ──

@@ -56,6 +56,7 @@ npm run android:build:all-abis  # All Android ABIs
 | `captcha_slider.rs` | tianai-captcha slider solver (Canny edge + template matching) |
 | `global_hotkeys.rs` | Desktop-only global shortcuts via `tauri-plugin-global-shortcut` |
 | `rate_limiter.rs` | Token bucket: 45 req/min sliding window |
+| `proxy.rs` | HTTP / HTTPS / SOCKS5 代理：CLI / 环境变量 / settings.json 三级优先级，写入 `reqwest::Proxy` |
 | `logging.rs` | File + stderr logging, panic hook |
 
 ### IPC: Frontend ↔ Rust
@@ -73,6 +74,11 @@ npm run android:build:all-abis  # All Android ABIs
 ### Audio Playback Resolution Chain (`resolve_online_play`)
 
 Local library → downloaded tracks → download dir same-name file → preview disk cache → recently played URL → **CatalogService** fetch preview → direct URL fallback
+
+### Network Proxy (播放源代理)
+
+所有「需要联网」的播放源请求（在线搜索 / 试听 / 歌词 / 分享链接 / 下载 / 富化）都走全局 `reqwest::Client`，
+其构造期注入 `reqwest::Proxy`。配置优先级 **CLI `--proxy` > 环境变量 (`CLOUDPLAYER_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`) > `settings.json` 中的 `proxy` 字段**，详见 [PROXY.md](PROXY.md)。
 
 ### Online Catalog
 

@@ -43,11 +43,12 @@ async-trait = "0.1"
 
 # reqwest TLS：桌面用 native-tls（Windows Schannel）；Android 用 rustls + webpki 内置根证书。
 # rustls-native-certs 在部分 Android 上读不到系统 CA，会导致 TLS 握手失败；webpki-roots 与常见浏览器根集一致。
+# SOCKS5 代理：reqwest 默认 feature 不含 socks，按平台显式打开。
 [target.'cfg(target_os = "android")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream", "socks"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream", "socks"] }
 tauri-plugin-global-shortcut = { version = "2", default-features = false }
 
 [profile.release]

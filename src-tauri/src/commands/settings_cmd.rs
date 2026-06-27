@@ -25,6 +25,10 @@ pub struct SettingsPatch {
     pub last_play_queue_json: Option<String>,
     pub last_play_index: Option<i64>,
     pub last_play_mode_index: Option<i64>,
+    /// 代理嵌套 patch（仅支持顶层三字段，URL 形态由 \`save_settings\` 调 \`proxy::validate_config\` 校验）。
+    pub proxy_enabled: Option<bool>,
+    pub proxy_url: Option<String>,
+    pub proxy_no_proxy: Option<String>,
 }
 
 #[tauri::command]
@@ -149,6 +153,25 @@ pub fn save_settings(patch: SettingsPatch) -> Result<(), String> {
     }
     if let Some(v) = patch.last_play_mode_index {
         s.last_play_mode_index = v.clamp(0, 3);
+    }
+    // 代理：enabled/url/no_proxy 三字段任意一个出现都视为一次 patch；
+    // URL 形态由 \`crate::proxy::validate_config\` 校验；运行期变更需重启。
+    let proxy_touched = patch.proxy_enabled.is_some()
+        || patch.proxy_url.is_some()
+        || patch.proxy_no_proxy.is_some();
+    if proxy_touched {
+        if let Some(b) = patch.proxy_enabled {
+            s.proxy.enabled = b;
+        }
+        if let Some(v) = patch.proxy_url {
+            s.proxy.url = v.trim().to_string();
+        }
+        if let Some(v) = patch.proxy_no_proxy {
+            s.proxy.no_proxy = v.trim().to_string();
+        }
+        if let Err(e) = crate::proxy::validate_config(&s.proxy) {
+            return Err(format!("代理设置无效: {e}"));
+        }
     }
     s.save()
 }

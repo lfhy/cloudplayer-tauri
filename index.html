@@ -461,6 +461,40 @@
                     <option value="">系统默认</option>
                   </select>
                 </div>
+                <div class="settings-field">
+                  <label class="settings-field-label">
+                    <span>播放源代理</span>
+                    <span id="setting-proxy-source" class="settings-proxy-source muted">检测中…</span>
+                  </label>
+                  <div class="settings-proxy-row">
+                    <label class="settings-proxy-toggle">
+                      <input type="checkbox" id="setting-proxy-enabled" />
+                      <span>启用代理</span>
+                    </label>
+                    <button type="button" id="btn-proxy-refresh" class="settings-proxy-refresh" title="重新读取当前生效的代理">刷新</button>
+                  </div>
+                  <input
+                    type="text"
+                    id="setting-proxy-url"
+                    class="settings-field-control settings-field-control--text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="socks5h://user:pass@127.0.0.1:1080"
+                    aria-describedby="setting-proxy-hint"
+                  />
+                  <input
+                    type="text"
+                    id="setting-proxy-no-proxy"
+                    class="settings-field-control settings-field-control--text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="不走代理的域名/IP，逗号分隔，例如 127.0.0.1,localhost,.internal"
+                    aria-describedby="setting-proxy-hint"
+                  />
+                  <p id="setting-proxy-hint" class="settings-field-hint muted">
+                    支持 <code>http://</code>、<code>https://</code>、<code>socks5://</code>、<code>socks5h://</code>（<code>socks5h</code> 由代理端做 DNS 解析，避免本地泄漏）。配置后所有在线搜索 / 试听 / 歌词 / 分享链接 / 下载 / 富化均走代理；优先级：命令行 <code>--proxy</code> &gt; 环境变量 <code>CLOUDPLAYER_PROXY</code> / <code>HTTPS_PROXY</code> &gt; 此处的设置。修改后需重启应用生效。
+                  </p>
+                </div>
                 <div class="settings-toolbar-actions">
                   <button type="button" class="settings-back-btn" id="btn-settings-back">← 返回</button>
                   <button type="button" class="settings-save-btn" id="settings-save" disabled aria-disabled="true">
