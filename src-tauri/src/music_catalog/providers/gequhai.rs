@@ -22,19 +22,6 @@ const SEARCH_KEYWORD_MAX_LEN: usize = 50;
 
 static GEOUHAI_HTTP: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static GEOUHAI_WARMED: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
-/// gequhai 专用直连客户端：禁用系统/Clash 代理（reqwest 默认 auto_sys_proxy 会读注册表 127.0.0.1:7890）。
-static GEOUHAI_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .timeout(Duration::from_secs(45))
-        .connect_timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .http1_only()
-        .cookie_store(true)
-        .no_proxy()
-        .user_agent(UA)
-        .build()
-        .expect("gequhai direct client")
-});
 
 pub struct GequhaiProvider;
 
@@ -59,10 +46,6 @@ impl GequhaiProvider {
 
     fn encode_path_segment(segment: &str) -> String {
         utf8_percent_encode(segment, NON_ALPHANUMERIC).to_string()
-    }
-
-    fn http_client(_: &Client) -> &'static Client {
-        &GEOUHAI_CLIENT
     }
 
     async fn with_http_gate<F, Fut, T>(f: F) -> T
@@ -160,7 +143,6 @@ impl GequhaiProvider {
 
     /// 站点需先 POST `/api/s`，必要时轮询 `/api/query-map`，再 GET 结果页。
     async fn prepare_search(client: &Client, keyword: &str) -> Result<(), String> {
-        let client = Self::http_client(client);
         let referer = format!("{}/", BASE_URL);
         let body = Self::form_keyword_body(keyword);
         let resp = Self::send_with_retry("POST /api/s", || {
@@ -196,7 +178,6 @@ impl GequhaiProvider {
     }
 
     async fn poll_query_map(client: &Client, keyword: &str) -> Result<(), String> {
-        let client = Self::http_client(client);
         let referer = Self::search_page_url(keyword, 1)?;
         let body = Self::form_keyword_body(keyword);
         for attempt in 0..15 {
@@ -294,7 +275,6 @@ impl GequhaiProvider {
 
     /// 预热：访问首页建立 cookie（每进程一次）。
     async fn warmup(client: &Client) {
-        let client = Self::http_client(client);
         let mut warmed = GEOUHAI_WARMED.lock().await;
         if *warmed {
             return;
@@ -310,7 +290,6 @@ impl GequhaiProvider {
 
     /// 获取歌曲页 HTML（须先于 `/api/music` 调用以建立 session）。
     async fn fetch_play_page(client: &Client, id: &str) -> Result<String, String> {
-        let client = Self::http_client(client);
         let url = format!("{}/play/{}", BASE_URL, id);
         let resp = client
             .get(&url)
@@ -387,7 +366,6 @@ impl GequhaiProvider {
         mp3_type: &str,
         referer_song_id: &str,
     ) -> Result<String, String> {
-        let client = Self::http_client(client);
         let referer = format!("{}/play/{}", BASE_URL, referer_song_id);
         let resp = client
             .post(format!("{}/api/music", BASE_URL))
@@ -511,7 +489,6 @@ impl MusicCatalogProvider for GequhaiProvider {
         }
 
         Self::with_http_gate(|| async {
-            let hc = Self::http_client(client);
             Self::warmup(client).await;
             if let Err(e) = Self::prepare_search(client, &keyword).await {
                 warn!(
@@ -526,7 +503,7 @@ impl MusicCatalogProvider for GequhaiProvider {
             let fetch_url = url.clone();
 
             let resp = Self::send_with_retry("GET /s/", || {
-                hc
+                client
                     .get(&fetch_url)
                     .header("User-Agent", UA)
                     .header(

@@ -103,13 +103,11 @@ pub fn run() {
                 .http1_only()
                 .cookie_store(true)
                 .danger_accept_invalid_certs(true)
-                .no_proxy()
                 .user_agent(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 );
 
-            // 非 localhost 的企业代理可显式启用；本地 Clash (127.0.0.1:7890) 不配置，
-            // 避免 reqwest auto_sys_proxy 自动走系统代理导致 gequhai 403/连接失败。
+            // 尝试使用系统代理（Windows 注册表），与浏览器行为一致。
             #[cfg(target_os = "windows")]
             {
                 if let Ok(internet_settings) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
@@ -118,25 +116,13 @@ pub fn run() {
                     let proxy_enable: u32 = internet_settings.get_value("ProxyEnable").unwrap_or(0);
                     if proxy_enable != 0 {
                         if let Ok(proxy_server) = internet_settings.get_value::<String, _>("ProxyServer") {
-                            let is_local_proxy = proxy_server.contains("127.0.0.1")
-                                || proxy_server.contains("localhost")
-                                || proxy_server.contains("[::1]");
-                            if !is_local_proxy {
-                                let proxy_url = if proxy_server.contains("://") {
-                                    proxy_server
-                                } else {
-                                    format!("http://{}", proxy_server)
-                                };
-                                if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
-                                    let proxy = if let Some(no_proxy) = reqwest::NoProxy::from_string(
-                                        "gequhai.com,www.gequhai.com,.gequhai.com,localhost,127.0.0.1",
-                                    ) {
-                                        proxy.no_proxy(Some(no_proxy))
-                                    } else {
-                                        proxy
-                                    };
-                                    client_builder = client_builder.proxy(proxy);
-                                }
+                            let proxy_url = if proxy_server.contains("://") {
+                                proxy_server
+                            } else {
+                                format!("http://{}", proxy_server)
+                            };
+                            if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+                                client_builder = client_builder.proxy(proxy);
                             }
                         }
                     }
