@@ -4,7 +4,8 @@ pub mod providers;
 mod service;
 mod types;
 
-pub use id::{parse_catalog_id, CatalogTrackId, PROVIDER_NONE, PROVIDER_PJMP3};
+pub use id::{parse_catalog_id, CatalogTrackId, PROVIDER_NONE};
 pub use provider::MusicCatalogProvider;
+pub use providers::GequhaiProvider;
 pub use service::CatalogService;
-pub use types::{SearchResultDto, CATALOG_UNAVAILABLE};
+pub use types::SearchResultDto;

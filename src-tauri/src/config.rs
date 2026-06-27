@@ -131,7 +131,7 @@ pub struct Settings {
     /// 上次播放顺序模式（0=顺序,1=列表循环,2=单曲,3=随机）
     #[serde(default)]
     pub last_play_mode_index: i64,
-    /// 在线曲库源：`none`（默认，不可用）| `pjmp3`（legacy，站点已下线）
+    /// 在线曲库源：`none`（默认，不可用）| `gequhai`（歌曲海）
     #[serde(default = "default_catalog_provider")]
     pub catalog_provider: String,
 }
@@ -161,7 +161,7 @@ fn default_main_window_close_action() -> String {
 }
 
 fn default_catalog_provider() -> String {
-    "none".to_string()
+    "gequhai".to_string()
 }
 
 /// 与前端设置表单一致：字符串格式见 global-hotkey 解析（如 `ctrl+alt+space`）。

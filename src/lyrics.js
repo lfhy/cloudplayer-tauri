@@ -221,7 +221,7 @@ export async function ensureLrcLoadedForCurrentTrack(loadGen) {
     });
     const raw = await invoke("fetch_song_lrc_enriched", {
       req: {
-        pjmp3SourceId: cur.local_path ? null : (cur.source_id || "").trim() || null,
+        catalogId: cur.local_path ? null : (cur.source_id || "").trim() || null,
         title: cur.title || "",
         artist: cur.artist || "",
         album: cur.album || "",

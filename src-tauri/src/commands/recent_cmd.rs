@@ -13,8 +13,8 @@ pub struct RecentPlayIn {
     pub title: String,
     pub artist: String,
     pub cover_url: Option<String>,
-    #[serde(default, alias = "catalog_id", alias = "catalogId")]
-    pub pjmp3_source_id: Option<String>,
+    #[serde(default, alias = "catalog_id", alias = "catalogId", alias = "pjmp3_source_id", alias = "pjmp3SourceId")]
+    pub catalog_id: Option<String>,
     #[serde(default, alias = "catalogProvider")]
     pub catalog_provider: Option<String>,
     pub file_path: Option<String>,
@@ -30,8 +30,8 @@ pub struct RecentPlayRow {
     pub title: String,
     pub artist: String,
     pub cover_url: Option<String>,
-    #[serde(alias = "catalog_id", alias = "catalogId")]
-    pub pjmp3_source_id: Option<String>,
+    #[serde(alias = "catalog_id", alias = "catalogId", alias = "pjmp3_source_id", alias = "pjmp3SourceId")]
+    pub catalog_id: Option<String>,
     #[serde(default)]
     pub catalog_provider: Option<String>,
     pub file_path: Option<String>,
@@ -58,7 +58,7 @@ pub fn list_recent_plays(state: State<'_, DbState>) -> Result<Vec<RecentPlayRow>
                 title: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 artist: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 cover_url: r.get(3)?,
-                pjmp3_source_id: r.get(4)?,
+                catalog_id: r.get(4)?,
                 catalog_provider: if cp.trim().is_empty() {
                     None
                 } else {
@@ -88,9 +88,9 @@ pub fn record_recent_play(state: State<'_, DbState>, row: RecentPlayIn) -> Resul
         return Err("kind 须为 online 或 local".to_string());
     }
     if k == "online" {
-        let sid = row.pjmp3_source_id.as_ref().map(|s| s.trim()).unwrap_or("");
+        let sid = row.catalog_id.as_ref().map(|s| s.trim()).unwrap_or("");
         if sid.is_empty() {
-            return Err("online 须含曲库 id（catalog_id / pjmp3_source_id）".to_string());
+            return Err("online 须含曲库 id（catalog_id）".to_string());
         }
     } else {
         let fp = row.file_path.as_ref().map(|s| s.trim()).unwrap_or("");
@@ -109,7 +109,7 @@ pub fn record_recent_play(state: State<'_, DbState>, row: RecentPlayIn) -> Resul
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {
-            row.pjmp3_source_id
+            row.catalog_id
                 .as_ref()
                 .map(|s| parse_catalog_id(s).provider)
                 .filter(|p| p != "none")
@@ -119,7 +119,7 @@ pub fn record_recent_play(state: State<'_, DbState>, row: RecentPlayIn) -> Resul
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     if k == "online" {
-        let sid = row.pjmp3_source_id.as_ref().map(|s| s.trim()).unwrap_or("");
+        let sid = row.catalog_id.as_ref().map(|s| s.trim()).unwrap_or("");
         tx.execute(
             "DELETE FROM recent_plays WHERE kind='online' AND pjmp3_source_id=?1",
             [sid],
@@ -131,7 +131,7 @@ pub fn record_recent_play(state: State<'_, DbState>, row: RecentPlayIn) -> Resul
             .map_err(|e| e.to_string())?;
     }
     let (pid, fpath): (Option<String>, Option<String>) = if k == "online" {
-        (row.pjmp3_source_id, None)
+        (row.catalog_id, None)
     } else {
         (None, row.file_path)
     };

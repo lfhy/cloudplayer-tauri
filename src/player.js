@@ -196,7 +196,7 @@ async function persistRecentPlaySnapshot(snap) {
           title: snap.title,
           artist: snap.artist || "",
           cover_url: null,
-          pjmp3_source_id: null,
+          catalog_id: null,
           file_path: snap.local_path,
         },
       });
@@ -207,7 +207,7 @@ async function persistRecentPlaySnapshot(snap) {
           title: snap.title,
           artist: snap.artist || "",
           cover_url: snap.cover_url ?? null,
-          pjmp3_source_id: snap.source_id,
+          catalog_id: snap.source_id,
           file_path: null,
           play_url: snap.play_url && String(snap.play_url).trim() ? String(snap.play_url).trim() : null,
         },
@@ -441,7 +441,7 @@ export async function playFromQueueIndex(idx) {
             songId = fid;
             if (appState.selectedPlaylistId != null && Number(iPl) === Number(appState.selectedPlaylistId)) {
               const match = appState.playlistDetailRows.find((row) => row.id === iRow);
-              if (match) match.pjmp3_source_id = fid;
+              if (match) match.catalog_id = fid;
               _deps.renderPlaylistDetailTable();
             }
           }

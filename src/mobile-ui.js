@@ -130,7 +130,7 @@ async function persistRecentPlaySnapshot(snap) {
           title: snap.title,
           artist: snap.artist || "",
           cover_url: null,
-          pjmp3_source_id: null,
+          catalog_id: null,
           file_path: snap.local_path,
         },
       });
@@ -141,7 +141,7 @@ async function persistRecentPlaySnapshot(snap) {
           title: snap.title,
           artist: snap.artist || "",
           cover_url: snap.cover_url ?? null,
-          pjmp3_source_id: snap.source_id,
+          catalog_id: snap.source_id,
           file_path: null,
           play_url: snap.play_url && String(snap.play_url).trim() ? String(snap.play_url).trim() : null,
         },
@@ -365,7 +365,7 @@ async function runPrefetchNextTrack() {
         playQueue[nextIdx] = { ...playQueue[nextIdx], source_id: fid };
         item = playQueue[nextIdx];
         const match = playlistDetailRows.find((row) => Number(row.id) === Number(iRow));
-        if (match) match.pjmp3_source_id = fid;
+        if (match) match.catalog_id = fid;
         patchPlaylistDetailRowAfterFill(Number(iRow), fid);
       }
     } catch (e) {
@@ -509,7 +509,7 @@ function scheduleEnrichRefresh() {
       rows.forEach((r, i) => {
         const li = lis[i];
         if (!li) return;
-        const sid = (r.pjmp3_source_id || "").trim();
+        const sid = (r.catalog_id || "").trim();
         const sub = li.querySelector(".cp-m-li-sub");
         if (sub) sub.textContent = r.artist || "";
         if (sid) {
@@ -518,7 +518,7 @@ function scheduleEnrichRefresh() {
           if (txt.includes("无曲库 id")) sub.textContent = txt.replace(/ · 无曲库 id$/, "");
         }
       });
-      const missing = rows.filter((r) => !(r.pjmp3_source_id || "").trim()).length;
+      const missing = rows.filter((r) => !(r.catalog_id || "").trim()).length;
       const heroSub = document.getElementById("cp-m-pl-hero-sub");
       if (heroSub) {
         heroSub.textContent = missing > 0
@@ -1131,7 +1131,7 @@ function recentRowToQueueItem(r) {
       cover_url: r.cover_url || null,
     };
   }
-  const sid = (r.pjmp3_source_id || "").trim();
+  const sid = (r.catalog_id || "").trim();
   if (!sid) return null;
   return {
     source_id: sid,
@@ -1285,7 +1285,7 @@ function playQueueToBatchRows() {
       title: it.title,
       artist: it.artist || "",
       album: it.album || "",
-      pjmp3_source_id: sid,
+      catalog_id: sid,
       source_id: sid,
       id: it.import_item_id != null ? it.import_item_id : null,
       cover_url: it.cover_url,
@@ -1299,7 +1299,7 @@ function mapRowsToAppendItems(rows) {
     title: row.title || "",
     artist: row.artist || "",
     album: row.album || "",
-    source_id: String(row.source_id ?? row.pjmp3_source_id ?? row.pjmp3SourceId ?? "").trim(),
+    source_id: String(row.source_id ?? row.catalog_id ?? row.catalogId ?? "").trim(),
     cover_url: String(row.cover_url ?? row.coverUrl ?? "").trim(),
     duration_ms: Math.max(0, Number(row.duration_ms ?? row.durationMs ?? 0) || 0),
     play_url: String(row.play_url ?? row.playUrl ?? "").trim(),
@@ -1359,7 +1359,7 @@ function wirePlaylistDetailTrackRow(li, r, i, rows) {
     /** 与桌面 `openSidebarPlaylistContextMenu` / `playlistImportRowToQueueItem` 一致：可无 source_id，播放时 `try_fill` */
     invalidateMobilePrefetch();
     playQueue = rows.map((row) => ({
-      source_id: (row.pjmp3_source_id || "").trim(),
+      source_id: (row.catalog_id || "").trim(),
       title: row.title,
       artist: row.artist || "",
       album: row.album || "",
@@ -1592,7 +1592,7 @@ async function runBatchDownloadWithQuality(quality) {
   let ok = 0;
   let skip = 0;
   for (const r of rows) {
-    let sid = fromSearch ? String(r.source_id ?? "").trim() : String(r.pjmp3_source_id ?? "").trim();
+    let sid = fromSearch ? String(r.source_id ?? "").trim() : String(r.catalog_id ?? "").trim();
     const playlistIdForFill =
       r.import_playlist_id != null && Number.isFinite(Number(r.import_playlist_id))
         ? Number(r.import_playlist_id)
@@ -1605,7 +1605,7 @@ async function runBatchDownloadWithQuality(quality) {
         });
         if (filled && String(filled).trim()) {
           sid = String(filled).trim();
-          r.pjmp3_source_id = sid;
+          r.catalog_id = sid;
         }
       } catch (e) {
         console.warn("try_fill_playlist_item_source_id", e);
@@ -1646,7 +1646,7 @@ function runBatchLike() {
   for (const r of rows) {
     const sid = fromSearch
       ? String(r.source_id ?? "").trim()
-      : String(r.pjmp3_source_id ?? "").trim();
+      : String(r.catalog_id ?? "").trim();
     if (!sid) {
       skip++;
       continue;
@@ -1692,7 +1692,7 @@ async function openPlaylistDetail(id, name) {
     };
   }
   if (heroTitle) heroTitle.textContent = name;
-  const missing = rows.filter((r) => !(r.pjmp3_source_id || "").trim()).length;
+  const missing = rows.filter((r) => !(r.catalog_id || "").trim()).length;
   if (heroSub) {
     heroSub.textContent = missing > 0
       ? `共 ${rows.length} 首 · 自动补全中 (${missing} 待处理)`
@@ -1705,7 +1705,7 @@ async function openPlaylistDetail(id, name) {
   rows.forEach((r, i) => {
     const li = document.createElement("li");
     li.className = "cp-m-pl-track";
-    const sid = (r.pjmp3_source_id || "").trim();
+    const sid = (r.catalog_id || "").trim();
     const ok = !!sid;
     li.innerHTML = `<span class="cp-m-pl-track-check" aria-hidden="true"></span><div class="cp-m-pl-track-main"><div class="cp-m-li-title">${escapeHtml(r.title || "—")}</div><div class="cp-m-li-sub">${escapeHtml(r.artist || "")}${ok ? "" : " · 无曲库 id"}</div></div>`;
     if (!ok) li.style.opacity = "0.5";
@@ -1876,7 +1876,7 @@ async function playFromQueueIndex(idx, opts = {}) {
             playQueue[idx] = item;
             songId = fid;
             const match = playlistDetailRows.find((row) => Number(row.id) === Number(iRow));
-            if (match) match.pjmp3_source_id = fid;
+            if (match) match.catalog_id = fid;
             patchPlaylistDetailRowAfterFill(Number(iRow), fid);
           }
         } catch (e) {

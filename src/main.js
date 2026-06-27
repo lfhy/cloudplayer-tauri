@@ -78,6 +78,10 @@ function bootDesktop() {
     .finally(() => {
       renderSidebar();
     });
+  // 曲库源切换后，自动为缺少 source_id 的歌单条目重新富化
+  invoke("re_enrich_all_playlists")
+    .then(() => { console.log("[boot] re_enrich_all_playlists triggered"); })
+    .catch((err) => { console.warn("[boot] re_enrich_all_playlists failed:", err); });
   document.getElementById("queue-toggle")?.addEventListener("click", () => toggleQueuePanel());
   wireDockBar();
   wireDownloadPage();

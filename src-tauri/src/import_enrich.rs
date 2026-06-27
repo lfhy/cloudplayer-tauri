@@ -1,21 +1,27 @@
 //! 导入歌单条目后台富化：搜索曲库 id、封面缓存、补专辑/时长。
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use reqwest::Client;
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use crate::commands::AppState;
 use crate::config::config_dir;
 use crate::db::DbState;
+use crate::music_catalog::parse_catalog_id;
+use crate::music_catalog::CatalogService;
 use crate::music_catalog::SearchResultDto;
 
-const ENRICH_DELAY_MS: u64 = 120;
+const ENRICH_DELAY_MS: u64 = 450;
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+/// 全局串行：避免 re_enrich_all 等多歌单并行打爆 gequhai 连接。
+static ENRICH_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[derive(Clone, Debug)]
 struct ImportRow {
@@ -23,7 +29,8 @@ struct ImportRow {
     title: String,
     artist: String,
     album: String,
-    pjmp3_source_id: String,
+    /// DB 列名仍为 `pjmp3_source_id`（历史兼容），语义为 catalog_id。
+    catalog_id: String,
     catalog_provider: String,
     cover_url: String,
     cover_cache_path: String,
@@ -45,7 +52,7 @@ fn load_row(conn: &Connection, playlist_id: i64, row_id: i64) -> Result<Option<I
             title: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
             artist: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
             album: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            pjmp3_source_id: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            catalog_id: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
             catalog_provider: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
             cover_url: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
             cover_cache_path: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
@@ -66,7 +73,7 @@ fn load_all_rows(conn: &Connection, playlist_id: i64) -> Result<Vec<ImportRow>, 
             title: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
             artist: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
             album: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            pjmp3_source_id: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            catalog_id: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
             catalog_provider: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
             cover_url: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
             cover_cache_path: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
@@ -80,12 +87,35 @@ fn load_all_rows(conn: &Connection, playlist_id: i64) -> Result<Vec<ImportRow>, 
     Ok(out)
 }
 
+fn catalog_id_needs_rematch(catalog_id: &str, catalog_provider: &str) -> bool {
+    let cid = catalog_id.trim();
+    if cid.is_empty() {
+        return true;
+    }
+    let active = CatalogService::active_provider_name();
+    if active == "none" {
+        return false;
+    }
+    let parsed = parse_catalog_id(cid);
+    if parsed.provider != "none" && parsed.provider != active {
+        return true;
+    }
+    let cp = catalog_provider.trim();
+    if !cp.is_empty() && cp != active {
+        return true;
+    }
+    // 无前缀裸 id 且 DB 未标记当前 provider → 历史导入 id，需重搜
+    if parsed.provider == "none" && cp != active {
+        return true;
+    }
+    false
+}
+
 fn needs_enrichment(t: &ImportRow) -> bool {
     if t.title.trim().is_empty() {
         return false;
     }
-    let sid = t.pjmp3_source_id.trim();
-    if sid.is_empty() {
+    if catalog_id_needs_rematch(&t.catalog_id, &t.catalog_provider) {
         return true;
     }
     let cu = t.cover_url.trim();
@@ -128,14 +158,7 @@ async fn apply_search_metadata(
     playlist_id: i64,
     row: &ImportRow,
 ) -> Result<(), String> {
-    let kw = format!("{} {}", row.title.trim(), row.artist.trim());
-    let q = kw.trim();
-    let q = if q.is_empty() {
-        row.title.trim().to_string()
-    } else {
-        q.to_string()
-    };
-    if q.is_empty() {
+    if row.title.trim().is_empty() {
         return Ok(());
     }
     if !app_state.catalog.is_online_available() {
@@ -144,7 +167,7 @@ async fn apply_search_metadata(
     app_state.limiter.acquire_slot().await;
     let Some(first) = app_state
         .catalog
-        .search_first_match(client, &q)
+        .search_first_match_variants(client, row.title.trim(), row.artist.trim())
         .await?
     else {
         return Ok(());
@@ -207,7 +230,7 @@ async fn ensure_cover_file(
     app_state: &AppState,
     row: &ImportRow,
 ) -> Result<Option<String>, String> {
-    let sid = row.pjmp3_source_id.trim();
+    let sid = row.catalog_id.trim();
     let cu = row.cover_url.trim();
     if sid.is_empty() || cu.is_empty() {
         return Ok(None);
@@ -245,7 +268,7 @@ async fn enrich_metadata(
     playlist_id: i64,
     row: &ImportRow,
 ) -> Result<(), String> {
-    let sid = row.pjmp3_source_id.trim();
+    let sid = row.catalog_id.trim();
     if sid.is_empty() {
         return Ok(());
     }
@@ -264,11 +287,18 @@ async fn enrich_metadata(
     };
     let mut album = row.album.clone();
     let mut dur = row.duration_ms;
+    let mut cover_url = row.cover_url.clone();
     if need_album && !meta.album.trim().is_empty() {
         album = meta.album;
     }
     if need_dur && meta.duration_ms > 0 {
         dur = meta.duration_ms;
+    }
+    if let Some(cu) = meta.cover_url.as_ref() {
+        let t = cu.trim();
+        if !t.is_empty() && row.cover_url.trim().is_empty() {
+            cover_url = t.to_string();
+        }
     }
     if need_album && album.trim().is_empty() {
         let kw = format!("{} {}", row.title.trim(), row.artist.trim());
@@ -285,8 +315,8 @@ async fn enrich_metadata(
     let db: tauri::State<'_, DbState> = app.state();
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "UPDATE playlist_import_items SET album=?1, duration_ms=?2 WHERE id=?3 AND playlist_id=?4",
-        rusqlite::params![album, dur, row.id, playlist_id],
+        "UPDATE playlist_import_items SET album=?1, duration_ms=?2, cover_url=?3 WHERE id=?4 AND playlist_id=?5",
+        rusqlite::params![album, dur, cover_url, row.id, playlist_id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -311,8 +341,8 @@ pub async fn try_resolve_import_row_source_id(
     let Some(row) = row else {
         return Ok(None);
     };
-    let existing = row.pjmp3_source_id.trim();
-    if !existing.is_empty() {
+    let existing = row.catalog_id.trim();
+    if !existing.is_empty() && !catalog_id_needs_rematch(existing, &row.catalog_provider) {
         return Ok(Some(existing.to_string()));
     }
     apply_search_metadata(app, client, app_state, playlist_id, &row).await?;
@@ -322,7 +352,7 @@ pub async fn try_resolve_import_row_source_id(
         load_row(&conn, playlist_id, row_id).map_err(|e| e.to_string())?
     };
     Ok(row2.and_then(|r| {
-        let s = r.pjmp3_source_id.trim();
+        let s = r.catalog_id.trim();
         if s.is_empty() {
             None
         } else {
@@ -336,6 +366,7 @@ pub fn spawn_playlist_enrich(app: AppHandle, playlist_id: i64) {
         return;
     }
     tauri::async_runtime::spawn(async move {
+        let _guard = ENRICH_SERIAL.lock().await;
         if let Err(e) = run_enrich(app, playlist_id).await {
             eprintln!("import enrich playlist {playlist_id}: {e}");
         }
@@ -369,7 +400,7 @@ async fn run_enrich(app: AppHandle, playlist_id: i64) -> Result<(), String> {
             continue;
         }
 
-        if row.pjmp3_source_id.trim().is_empty() {
+        if row.catalog_id.trim().is_empty() || catalog_id_needs_rematch(&row.catalog_id, &row.catalog_provider) {
             apply_search_metadata(&app, &client, app_state_arc.as_ref(), playlist_id, &row).await?;
             let _ = app.emit(
                 "import-enrich-item-done",
@@ -384,7 +415,7 @@ async fn run_enrich(app: AppHandle, playlist_id: i64) -> Result<(), String> {
             };
         }
 
-        if row.pjmp3_source_id.trim().is_empty() {
+        if row.catalog_id.trim().is_empty() {
             continue;
         }
 
@@ -410,12 +441,34 @@ async fn run_enrich(app: AppHandle, playlist_id: i64) -> Result<(), String> {
 
         let need_album = row.album.trim().is_empty();
         let need_dur = row.duration_ms <= 0;
-        if need_album || need_dur {
+        let need_cover_url = row.cover_url.trim().is_empty();
+        if need_album || need_dur || need_cover_url {
             enrich_metadata(&app, &client, app_state_arc.as_ref(), playlist_id, &row).await?;
             let _ = app.emit(
                 "import-enrich-item-done",
                 serde_json::json!({ "playlistId": playlist_id, "rowId": rid }),
             );
+        }
+
+        let row = {
+            let db: tauri::State<'_, DbState> = app.state();
+            let conn = db.conn.lock().map_err(|e| e.to_string())?;
+            load_row(&conn, playlist_id, rid)
+                .map_err(|e| e.to_string())?
+                .unwrap_or(row)
+        };
+
+        if !row.cover_url.trim().is_empty() {
+            let r_cover = row.clone();
+            if let Ok(Some(path)) = ensure_cover_file(&client, app_state_arc.as_ref(), &r_cover).await {
+                let db: tauri::State<'_, DbState> = app.state();
+                let conn = db.conn.lock().map_err(|e| e.to_string())?;
+                update_row_cover_cache(&conn, playlist_id, rid, &path)?;
+                let _ = app.emit(
+                    "import-enrich-item-done",
+                    serde_json::json!({ "playlistId": playlist_id, "rowId": rid }),
+                );
+            }
         }
     }
 

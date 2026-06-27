@@ -1,6 +1,5 @@
-//! 复合曲库 ID：`provider:id`；裸数字视为 legacy `pjmp3` id。
+//! 复合曲库 ID：`provider:id`。
 
-pub const PROVIDER_PJMP3: &str = "pjmp3";
 pub const PROVIDER_NONE: &str = "none";
 
 /// 解析 API / DB 传入的 id 字符串。
@@ -22,9 +21,9 @@ pub fn parse_catalog_id(raw: &str) -> CatalogTrackId {
             };
         }
     }
-    // legacy：纯数字或其它无冒号格式 → pjmp3
+    // 无冒号格式 → 未知来源，使用原始字符串作为 id
     CatalogTrackId {
-        provider: PROVIDER_PJMP3.to_string(),
+        provider: PROVIDER_NONE.to_string(),
         id: s.to_string(),
     }
 }
@@ -41,10 +40,6 @@ impl CatalogTrackId {
             provider: provider.into(),
             id: id.into(),
         }
-    }
-
-    pub fn pjmp3(id: impl Into<String>) -> Self {
-        Self::new(PROVIDER_PJMP3, id)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -76,19 +71,6 @@ impl CatalogTrackId {
             "unknown".to_string()
         } else {
             safe
-        }
-    }
-
-    /// legacy 裸 id（仅数字部分），用于旧缓存路径 `preview_{digits}.*`。
-    pub fn legacy_pjmp3_digits(&self) -> Option<String> {
-        if self.provider != PROVIDER_PJMP3 {
-            return None;
-        }
-        let safe: String = self.id.chars().filter(|c| c.is_ascii_digit()).collect();
-        if safe.is_empty() {
-            None
-        } else {
-            Some(safe)
         }
     }
 }

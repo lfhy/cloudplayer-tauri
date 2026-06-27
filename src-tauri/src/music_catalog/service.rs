@@ -1,4 +1,4 @@
-//! 在线曲库门面：按 settings 选择 active provider，统一\统一试听缓存路径。
+//! 在线曲库门面：按 settings 选择 active provider，统一试听缓存路径。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,9 +8,9 @@ use reqwest::Client;
 
 use crate::config::Settings;
 
-use super::id::{parse_catalog_id, CatalogTrackId, PROVIDER_NONE, PROVIDER_PJMP3};
+use super::id::{parse_catalog_id, CatalogTrackId, PROVIDER_NONE};
 use super::provider::MusicCatalogProvider;
-use super::providers::Pjmp3Provider;
+use super::providers::GequhaiProvider;
 use super::types::{
     PreviewResolve, SearchPage, SearchResultDto, TrackMetadata, CATALOG_UNAVAILABLE,
 };
@@ -25,8 +25,8 @@ impl CatalogService {
     pub fn new() -> Self {
         let mut providers: HashMap<String, Arc<dyn MusicCatalogProvider>> = HashMap::new();
         providers.insert(
-            PROVIDER_PJMP3.to_string(),
-            Arc::new(Pjmp3Provider::new()),
+            "gequhai".to_string(),
+            Arc::new(GequhaiProvider::new()),
         );
         Self { providers }
     }
@@ -58,7 +58,7 @@ impl CatalogService {
         self.provider_for_name(&Self::active_provider_name())
     }
 
-    /// 解析 id 并确保其 provider 与当前 active 一致（或 id 无 provider 前缀时使用 active）。
+    /// 若 id 带旧 provider 前缀（如 pjmp3）而当前 active 不同，用 active 的 id 重试（历史裸 id）。
     pub fn resolve_track_id(&self, raw: &str) -> Result<CatalogTrackId, String> {
         let parsed = parse_catalog_id(raw);
         if parsed.is_empty() {
@@ -68,16 +68,11 @@ impl CatalogService {
         if active == PROVIDER_NONE {
             return Err(CATALOG_UNAVAILABLE.to_string());
         }
-        if parsed.provider != PROVIDER_PJMP3 && parsed.provider != active {
+        if parsed.provider != PROVIDER_NONE && parsed.provider != active {
             return Err(format!(
-                "当前曲库源为 {active}，与曲目 id 来源 {} 不匹配",
+                "历史曲库 id（{}）已失效，请在「发现」中重新搜索或在歌单中触发富化",
                 parsed.provider
             ));
-        }
-        if parsed.provider == PROVIDER_PJMP3 && active != PROVIDER_PJMP3 {
-            return Err(
-                "历史曲库 id 已失效，请在「发现」中重新搜索该曲".to_string(),
-            );
         }
         Ok(CatalogTrackId::new(active, parsed.id))
     }
@@ -137,6 +132,32 @@ impl CatalogService {
         Ok(page.results.into_iter().next())
     }
 
+    /// 按标题/歌手生成多组关键词，返回首个命中。
+    pub async fn search_first_match_variants(
+        &self,
+        client: &Client,
+        title: &str,
+        artist: &str,
+    ) -> Result<Option<SearchResultDto>, String> {
+        let keywords = GequhaiProvider::search_keyword_variants(title, artist);
+        for kw in keywords {
+            match self.search_first_match(client, &kw).await {
+                Ok(Some(r)) => return Ok(Some(r)),
+                Ok(None) => {}
+                Err(e) => {
+                    log::warn!(target: "catalog", "search variant failed kw={} err={}", kw, e);
+                    if e.contains("error sending request")
+                        || e.contains("timeout")
+                        || e.contains("connect")
+                    {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
     pub async fn fetch_metadata(
         &self,
         client: &Client,
@@ -148,10 +169,10 @@ impl CatalogService {
     }
 
     pub fn preview_audio_cache_dir() -> PathBuf {
-        super::providers::pjmp3_impl::preview_audio_cache_dir()
+        std::env::temp_dir().join("cloudplayer_tauri_audio")
     }
 
-    /// 查找已有试听缓存：新路径 `preview_{provider}_{id}.*`，兼容 legacy `preview_{digits}.*`。
+    /// 查找已有试听缓存：`preview_{provider}_{id}.*`。
     pub fn preview_cache_path_if_exists(raw_id: &str) -> Option<PathBuf> {
         let track_id = parse_catalog_id(raw_id);
         if track_id.is_empty() {
@@ -163,14 +184,6 @@ impl CatalogService {
             let path = dir.join(format!("preview_{key}{ext}"));
             if path_is_nonempty_file(&path) {
                 return Some(path);
-            }
-        }
-        if let Some(digits) = track_id.legacy_pjmp3_digits() {
-            for ext in PREVIEW_CACHE_EXTS {
-                let path = dir.join(format!("preview_{digits}{ext}"));
-                if path_is_nonempty_file(&path) {
-                    return Some(path);
-                }
             }
         }
         None

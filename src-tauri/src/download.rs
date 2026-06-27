@@ -1,25 +1,16 @@
-//! 与 Python `services/download_service.py` 对齐：顺序队列、captcha 链、流式落盘。
+//! 顺序下载队列：通过 provider trait 委托具体下载实现。
 
 use std::error::Error;
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
 use log::{error, info, warn};
-use rand::Rng;
 use reqwest::Client;
 use serde::Serialize;
-use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
-use crate::captcha_slider::solve_tianai_slider;
 use crate::config::{default_download_dir, Settings};
-use crate::music_catalog::providers::pjmp3_impl::PJMP3_BASE_URL;
-use crate::music_catalog::{PROVIDER_PJMP3};
-
-const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 fn persist_downloaded_record(app: &AppHandle, path: &Path, job: &DownloadJob, written_len: u64) {
     let Some(state) = app.try_state::<crate::db::DbState>() else {
@@ -81,37 +72,6 @@ fn format_reqwest_err(e: &reqwest::Error) -> String {
     }
 }
 
-async fn get_captcha_gen_with_retry(client: &Client, base: &str) -> Result<reqwest::Response, reqwest::Error> {
-    let url = format!("{}/captcha/gen", base);
-    let mut last_err: Option<reqwest::Error> = None;
-    for attempt in 1..=3u32 {
-        match client
-            .get(&url)
-            .header("User-Agent", BROWSER_UA)
-            .header("Referer", format!("{}/", base))
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .send()
-            .await
-        {
-            Ok(r) => return Ok(r),
-            Err(e) => {
-                if attempt < 3 {
-                    warn!(
-                        target: "download",
-                        "captcha/gen 第 {} 次请求失败: {}",
-                        attempt,
-                        format_reqwest_err(&e)
-                    );
-                    tokio::time::sleep(Duration::from_millis(400 * attempt as u64)).await;
-                }
-                last_err = Some(e);
-            }
-        }
-    }
-    Err(last_err.expect("retry loop"))
-}
-
 #[derive(Debug, Clone)]
 pub struct DownloadJob {
     pub source_id: String,
@@ -151,61 +111,6 @@ fn sanitize_filename(s: &str) -> String {
             c => c,
         })
         .collect()
-}
-
-/// tianai-captcha `/captcha/gen` 相关字段的提取。
-#[derive(Debug, Clone)]
-struct TianaiCaptcha {
-    id: String,
-    background_b64: String,
-    template_b64: String,
-    bg_w: u32,
-    bg_h: u32,
-    tmpl_w: u32,
-    tmpl_h: u32,
-}
-
-fn u32_from_value(v: Option<&Value>) -> Option<u32> {
-    v.and_then(|x| x.as_u64()).and_then(|n| u32::try_from(n).ok())
-}
-
-/// 从 `/captcha/gen` JSON 里按 tianai-captcha 字段抽取；
-/// 兼容 `{id, captcha:{backgroundImage,templateImage,...}}` 与顶层平铺两种结构。
-fn extract_tianai_captcha(v: &Value) -> Option<TianaiCaptcha> {
-    fn try_obj(id: &str, m: &serde_json::Map<String, Value>) -> Option<TianaiCaptcha> {
-        let bg = m.get("backgroundImage")?.as_str()?.to_string();
-        let tmpl = m.get("templateImage")?.as_str()?.to_string();
-        let bg_w = u32_from_value(m.get("backgroundImageWidth")).unwrap_or(0);
-        let bg_h = u32_from_value(m.get("backgroundImageHeight")).unwrap_or(0);
-        let tmpl_w = u32_from_value(m.get("templateImageWidth")).unwrap_or(0);
-        let tmpl_h = u32_from_value(m.get("templateImageHeight")).unwrap_or(0);
-        if bg.len() < 200 || tmpl.len() < 100 {
-            return None;
-        }
-        Some(TianaiCaptcha {
-            id: id.to_string(),
-            background_b64: bg,
-            template_b64: tmpl,
-            bg_w,
-            bg_h,
-            tmpl_w,
-            tmpl_h,
-        })
-    }
-
-    let m = v.as_object()?;
-    let id = m.get("id").and_then(|x| x.as_str()).unwrap_or("");
-    if id.len() >= 8 {
-        if let Some(Value::Object(inner)) = m.get("captcha") {
-            if let Some(c) = try_obj(id, inner) {
-                return Some(c);
-            }
-        }
-        if let Some(c) = try_obj(id, m) {
-            return Some(c);
-        }
-    }
-    None
 }
 
 fn dest_root() -> PathBuf {
@@ -287,21 +192,10 @@ pub async fn run_one_job(client: Client, app: AppHandle, job: DownloadJob) {
         message: None,
     };
 
-    let catalog_track_id = {
+    let (provider, catalog_track_id) = {
         let st = app.state::<Arc<crate::commands::AppState>>();
         match st.catalog.require_download_provider(&job.source_id) {
-            Ok((provider, track_id)) => {
-                if provider.name() != PROVIDER_PJMP3 {
-                    download_fail_emit(
-                        &mut task,
-                        &emit,
-                        &job,
-                        format!("{} 的下载尚未实现", provider.name()),
-                    );
-                    return;
-                }
-                track_id
-            }
+            Ok((provider, track_id)) => (provider, track_id),
             Err(e) => {
                 download_fail_emit(&mut task, &emit, &job, e);
                 return;
@@ -316,251 +210,7 @@ pub async fn run_one_job(client: Client, app: AppHandle, job: DownloadJob) {
 
     task.status = "downloading".to_string();
     emit(task.clone());
-    emit_download_step(&mut task, &emit, 0.04, "准备下载（验证码）…");
-
-    let base = PJMP3_BASE_URL.trim_end_matches('/');
-    let sid = catalog_track_id.id.trim();
-    let song_page = format!("{}/song.php?id={}", base, sid);
-
-    // tianai-captcha TTL 很短且每个 id 只能校验一次；遇到 `已失效`/`基础校验失败` 时重新 gen。
-    const CAPTCHA_MAX_ATTEMPTS: usize = 4;
-    let mut captcha_id = String::new();
-    let mut last_fail_msg: Option<String> = None;
-
-    for attempt in 1..=CAPTCHA_MAX_ATTEMPTS {
-        emit_download_step(
-            &mut task,
-            &emit,
-            0.06 + (attempt.saturating_sub(1)) as f64 * 0.06,
-            format!("验证码 {attempt}/{max}：拉取图片…", max = CAPTCHA_MAX_ATTEMPTS),
-        );
-        let gen_r = match get_captcha_gen_with_retry(&client, base).await {
-            Ok(r) => r,
-            Err(e) => {
-                last_fail_msg = Some(format!("captcha/gen: {}", format_reqwest_err(&e)));
-                continue;
-            }
-        };
-        if !gen_r.status().is_success() {
-            last_fail_msg = Some(format!("captcha/gen HTTP {}", gen_r.status()));
-            continue;
-        }
-        let gen_text = match gen_r.text().await {
-            Ok(t) => t,
-            Err(e) => {
-                last_fail_msg =
-                    Some(format!("读取验证码响应: {}", format_reqwest_err(&e)));
-                continue;
-            }
-        };
-        let payload: Value = match serde_json::from_str(&gen_text) {
-            Ok(v) => v,
-            Err(e) => {
-                last_fail_msg = Some(format!("验证码响应非 JSON: {e}"));
-                continue;
-            }
-        };
-        let Some(cap) = extract_tianai_captcha(&payload) else {
-            let prefix: String = gen_text.chars().take(500).collect();
-            warn!(
-                target: "download",
-                "captcha/gen: tianai 字段缺失 | body prefix: {}",
-                prefix
-            );
-            last_fail_msg = Some("无法解析验证码响应结构".to_string());
-            continue;
-        };
-
-        emit_download_step(
-            &mut task,
-            &emit,
-            0.12 + (attempt.saturating_sub(1)) as f64 * 0.06,
-            "识别滑块位置（计算中，请稍候）…",
-        );
-        let drag_x = match solve_tianai_slider(&cap.background_b64, &cap.template_b64) {
-            Some(v) => v,
-            None => {
-                last_fail_msg = Some("自动滑块匹配失败".to_string());
-                continue;
-            }
-        };
-
-        emit_download_step(
-            &mut task,
-            &emit,
-            0.22 + (attempt.saturating_sub(1)) as f64 * 0.05,
-            "提交验证…",
-        );
-        // tianai-captcha `/captcha/check`：POST JSON，需要 bg/tmpl 尺寸 + trackList。
-        let start = chrono::Local::now();
-        // 模拟 1.1~1.8s 的拖动过程；与后端"轨迹熵"校验相容。
-        let drag_duration_ms: u64 = {
-            let mut rng = rand::thread_rng();
-            rng.gen_range(1100u64..1800u64)
-        };
-        let stop = start + chrono::Duration::milliseconds(drag_duration_ms as i64);
-        let fmt =
-            |t: chrono::DateTime<chrono::Local>| t.format("%Y-%m-%d %H:%M:%S").to_string();
-
-        // 用 3 个关键点构造一条单调上升的拖动轨迹（down → 中段 move → up）。
-        let mid_x = (drag_x as f64 * 0.55).round() as i32;
-        let mid_t = (drag_duration_ms as f64 * 0.5).round() as i64;
-        let end_t = drag_duration_ms as i64;
-        let track = serde_json::json!([
-            {"x": 0, "y": 0, "type": "down", "t": 0},
-            {"x": mid_x, "y": 4, "type": "move", "t": mid_t},
-            {"x": drag_x, "y": 6, "type": "move", "t": end_t - 50},
-            {"x": drag_x, "y": 6, "type": "up", "t": end_t},
-        ]);
-
-        let (bg_w, bg_h) = if cap.bg_w > 0 && cap.bg_h > 0 {
-            (cap.bg_w, cap.bg_h)
-        } else {
-            (600, 300)
-        };
-        let (tmpl_w, tmpl_h) = if cap.tmpl_w > 0 && cap.tmpl_h > 0 {
-            (cap.tmpl_w, cap.tmpl_h)
-        } else {
-            (110, 300)
-        };
-
-        let check_body = serde_json::json!({
-            "id": cap.id,
-            "data": {
-                "bgImageWidth": bg_w,
-                "bgImageHeight": bg_h,
-                "sliderImageWidth": tmpl_w,
-                "sliderImageHeight": tmpl_h,
-                "startTime": fmt(start),
-                "stopTime": fmt(stop),
-                "trackList": track,
-            }
-        });
-
-        let chk = match client
-            .post(format!("{}/captcha/check", base))
-            .header("Content-Type", "application/json")
-            .header("User-Agent", BROWSER_UA)
-            .header("Referer", song_page.as_str())
-            .json(&check_body)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                last_fail_msg =
-                    Some(format!("captcha/check: {}", format_reqwest_err(&e)));
-                continue;
-            }
-        };
-        if !chk.status().is_success() {
-            last_fail_msg = Some(format!("captcha/check HTTP {}", chk.status()));
-            continue;
-        }
-        let chk_text = chk.text().await.unwrap_or_default();
-        let chk_json: Value = serde_json::from_str(&chk_text).unwrap_or(Value::Null);
-        let chk_ok = chk_json
-            .get("success")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false);
-        if chk_ok {
-            captcha_id = cap.id;
-            info!(
-                target: "download",
-                "captcha 通过 attempt={} drag_x={} id={}",
-                attempt,
-                drag_x,
-                captcha_id
-            );
-            emit_download_step(&mut task, &emit, 0.40, "验证通过，获取音频地址…");
-            break;
-        }
-
-        warn!(
-            target: "download",
-            "captcha/check 未通过 attempt={} drag_x={} body={}",
-            attempt,
-            drag_x,
-            chk_text.chars().take(300).collect::<String>()
-        );
-        last_fail_msg = Some(format!("验证未通过（x={drag_x}）: {chk_text}"));
-    }
-
-    if captcha_id.is_empty() {
-        download_fail_emit(
-            &mut task,
-            &emit,
-            &job,
-            last_fail_msg.unwrap_or_else(|| "验证码校验失败".to_string()),
-        );
-        return;
-    }
-
-    // captcha 通过后 token 时效很短，立刻换链接；短暂 150~350ms 抖动模拟真人。
-    let gap_ms = {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(150u64..350u64)
-    };
-    tokio::time::sleep(Duration::from_millis(gap_ms)).await;
-
-    emit_download_step(&mut task, &emit, 0.43, "请求下载链接…");
-    let url_r = match client
-        .get(format!("{}/captcha/check/getMusicUrl", base))
-        .query(&[
-            ("captchaId", captcha_id.as_str()),
-            ("id", sid),
-            ("br", job.quality.as_str()),
-        ])
-        .header("User-Agent", BROWSER_UA)
-        .header("Referer", song_page.as_str())
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            download_fail_emit(
-                &mut task,
-                &emit,
-                &job,
-                format!("getMusicUrl: {}", format_reqwest_err(&e)),
-            );
-            return;
-        }
-    };
-    if !url_r.status().is_success() {
-        download_fail_emit(
-            &mut task,
-            &emit,
-            &job,
-            format!("getMusicUrl HTTP {}", url_r.status()),
-        );
-        return;
-    }
-    let url_json: Value = match url_r.json::<Value>().await {
-        Ok(v) => v,
-        Err(e) => {
-            download_fail_emit(
-                &mut task,
-                &emit,
-                &job,
-                format!("解析 getMusicUrl JSON: {}", format_reqwest_err(&e)),
-            );
-            return;
-        }
-    };
-    if url_json.get("code").and_then(|c| c.as_i64()) != Some(200) {
-        download_fail_emit(
-            &mut task,
-            &emit,
-            &job,
-            format!("获取下载链接失败: {url_json}"),
-        );
-        return;
-    }
-    let Some(music_url) = url_json.get("result").and_then(|r| r.as_str()) else {
-        download_fail_emit(&mut task, &emit, &job, "响应无 result URL".to_string());
-        return;
-    };
+    emit_download_step(&mut task, &emit, 0.05, "准备下载…");
 
     let ext = if job.quality == "flac" { ".flac" } else { ".mp3" };
     let name = sanitize_filename(&format!("{} - {}{}", job.title, job.artist, ext));
@@ -571,349 +221,63 @@ pub async fn run_one_job(client: Client, app: AppHandle, job: DownloadJob) {
     }
     let out_path = root.join(name);
 
-    emit_download_step(&mut task, &emit, 0.46, "连接 CDN，开始下载…");
     info!(
         target: "download",
-        "streaming audio source_id={} url_len={}",
+        "starting download source_id={} provider={} dest={}",
         job.source_id,
-        music_url.len()
-    );
-
-    let resp = match client
-        .get(music_url)
-        .header("User-Agent", BROWSER_UA)
-        .header("Referer", song_page.as_str())
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            download_fail_emit(
-                &mut task,
-                &emit,
-                &job,
-                format!("下载音频: {}", format_reqwest_err(&e)),
-            );
-            return;
-        }
-    };
-    if !resp.status().is_success() {
-        download_fail_emit(
-            &mut task,
-            &emit,
-            &job,
-            format!("音频 HTTP {}", resp.status()),
-        );
-        return;
-    }
-    let total = resp.content_length().unwrap_or(0);
-    let mut stream = resp.bytes_stream();
-    let mut file = match tokio::fs::File::create(&out_path).await {
-        Ok(f) => f,
-        Err(e) => {
-            download_fail_emit(&mut task, &emit, &job, format!("创建文件: {e}"));
-            return;
-        }
-    };
-
-    let mut received: u64 = 0;
-    let mut last_emit = Instant::now();
-    let mut acc_emit: usize = 0;
-    const EMIT_EVERY: Duration = Duration::from_millis(280);
-    const EMIT_BYTES: usize = 256 * 1024;
-
-    while let Some(item) = stream.next().await {
-        let chunk = match item {
-            Ok(c) => c,
-            Err(e) => {
-                download_fail_emit(
-                    &mut task,
-                    &emit,
-                    &job,
-                    format!("下载流: {}", format_reqwest_err(&e)),
-                );
-                return;
-            }
-        };
-        let n = chunk.len() as u64;
-        if let Err(e) = file.write_all(&chunk).await {
-            download_fail_emit(&mut task, &emit, &job, format!("写入: {e}"));
-            return;
-        }
-        received += n;
-        acc_emit += chunk.len();
-
-        let time_ok = last_emit.elapsed() >= EMIT_EVERY;
-        let size_ok = acc_emit >= EMIT_BYTES;
-        if time_ok || size_ok {
-            acc_emit = 0;
-            last_emit = Instant::now();
-            let frac = if total > 0 {
-                (received as f64 / total as f64).min(1.0)
-            } else {
-                (1.0 - (-(received as f64) / 5_000_000.0).exp()).min(0.92)
-            };
-            let p = 0.48 + 0.48 * frac;
-            let mb = received as f64 / 1_048_576.0;
-            let msg = if total > 0 {
-                format!(
-                    "下载中 {mb:.1} / {:.1} MB",
-                    total as f64 / 1_048_576.0
-                )
-            } else {
-                format!("下载中 {mb:.1} MB…")
-            };
-            emit_download_step(&mut task, &emit, p.min(0.98), msg);
-        }
-    }
-
-    if let Err(e) = file.flush().await {
-        download_fail_emit(&mut task, &emit, &job, format!("写入: {e}"));
-        return;
-    }
-
-    let done = received;
-    if total > 0 {
-        task.progress = (done as f64) / (total as f64);
-    } else {
-        task.progress = 0.99;
-    }
-    emit(task.clone());
-
-    if let Err(e) = record_download_success() {
-        log::warn!(
-            target: "download",
-            "saved file but daily count failed: {} | source_id={}",
-            e,
-            job.source_id
-        );
-        task.message = Some(format!("已保存但计数失败: {e}"));
-    } else {
-        task.message = Some(format!("已保存: {}", out_path.display()));
-    }
-    persist_downloaded_record(&app, out_path.as_path(), &job, done);
-    task.status = "completed".to_string();
-    task.progress = 1.0;
-    info!(
-        target: "download",
-        "completed source_id={} path={}",
-        job.source_id,
+        provider.name(),
         out_path.display()
     );
-    emit(task);
-}
 
-/// 走 tianai-captcha + getMusicUrl 拿到站点授权的**完整**音频直链；
-/// 与 `run_one_job` 的上半段行为一致，但不发事件、不占用每日下载额度，
-/// 专供「在线播放」复用（`pjmp3::cache_full_audio_file`）。
-///
-/// 返回值是可直接流式下载的 URL（已通过验证码签名，TTL 很短，拿到后应立刻下载）。
-pub async fn fetch_full_music_url(
-    client: &Client,
-    source_id: &str,
-    quality: &str,
-) -> Result<String, String> {
-    let sid = source_id.trim();
-    if sid.is_empty() {
-        return Err("无效的歌曲 ID".to_string());
-    }
-    let br = match quality.trim().to_ascii_lowercase().as_str() {
-        "flac" => "flac",
-        "320" | "hq" => "320",
-        _ => "128",
-    };
-    let base = PJMP3_BASE_URL.trim_end_matches('/');
-    let song_page = format!("{}/song.php?id={}", base, sid);
+    match provider
+        .download_full(&client, &catalog_track_id, &job.quality, &out_path)
+        .await
+    {
+        Ok(()) => {
+            let written = std::fs::metadata(&out_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
 
-    const MAX_ATTEMPTS: usize = 4;
-    let mut captcha_id = String::new();
-    let mut last_err: Option<String> = None;
-
-    for attempt in 1..=MAX_ATTEMPTS {
-        let gen_r = match get_captcha_gen_with_retry(client, base).await {
-            Ok(r) => r,
-            Err(e) => {
-                last_err = Some(format!("captcha/gen: {}", format_reqwest_err(&e)));
-                continue;
+            if let Err(e) = record_download_success() {
+                log::warn!(
+                    target: "download",
+                    "saved file but daily count failed: {} | source_id={}",
+                    e,
+                    job.source_id
+                );
+                task.message = Some(format!("已保存但计数失败: {e}"));
+            } else {
+                task.message = Some(format!("已保存: {}", out_path.display()));
             }
-        };
-        if !gen_r.status().is_success() {
-            last_err = Some(format!("captcha/gen HTTP {}", gen_r.status()));
-            continue;
-        }
-        let gen_text = match gen_r.text().await {
-            Ok(t) => t,
-            Err(e) => {
-                last_err = Some(format!("读取验证码响应: {}", format_reqwest_err(&e)));
-                continue;
-            }
-        };
-        let payload: Value = match serde_json::from_str(&gen_text) {
-            Ok(v) => v,
-            Err(e) => {
-                last_err = Some(format!("验证码响应非 JSON: {e}"));
-                continue;
-            }
-        };
-        let Some(cap) = extract_tianai_captcha(&payload) else {
-            last_err = Some("无法解析验证码响应结构".to_string());
-            continue;
-        };
-        let drag_x = match solve_tianai_slider(&cap.background_b64, &cap.template_b64) {
-            Some(v) => v,
-            None => {
-                last_err = Some("自动滑块匹配失败".to_string());
-                continue;
-            }
-        };
-
-        let start = chrono::Local::now();
-        let drag_duration_ms: u64 = {
-            let mut rng = rand::thread_rng();
-            rng.gen_range(1100u64..1800u64)
-        };
-        let stop = start + chrono::Duration::milliseconds(drag_duration_ms as i64);
-        let fmt = |t: chrono::DateTime<chrono::Local>| t.format("%Y-%m-%d %H:%M:%S").to_string();
-        let mid_x = (drag_x as f64 * 0.55).round() as i32;
-        let mid_t = (drag_duration_ms as f64 * 0.5).round() as i64;
-        let end_t = drag_duration_ms as i64;
-        let track = serde_json::json!([
-            {"x": 0, "y": 0, "type": "down", "t": 0},
-            {"x": mid_x, "y": 4, "type": "move", "t": mid_t},
-            {"x": drag_x, "y": 6, "type": "move", "t": end_t - 50},
-            {"x": drag_x, "y": 6, "type": "up", "t": end_t},
-        ]);
-        let (bg_w, bg_h) = if cap.bg_w > 0 && cap.bg_h > 0 {
-            (cap.bg_w, cap.bg_h)
-        } else {
-            (600, 300)
-        };
-        let (tmpl_w, tmpl_h) = if cap.tmpl_w > 0 && cap.tmpl_h > 0 {
-            (cap.tmpl_w, cap.tmpl_h)
-        } else {
-            (110, 300)
-        };
-        let check_body = serde_json::json!({
-            "id": cap.id,
-            "data": {
-                "bgImageWidth": bg_w,
-                "bgImageHeight": bg_h,
-                "sliderImageWidth": tmpl_w,
-                "sliderImageHeight": tmpl_h,
-                "startTime": fmt(start),
-                "stopTime": fmt(stop),
-                "trackList": track,
-            }
-        });
-        let chk = match client
-            .post(format!("{}/captcha/check", base))
-            .header("Content-Type", "application/json")
-            .header("User-Agent", BROWSER_UA)
-            .header("Referer", song_page.as_str())
-            .json(&check_body)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                last_err = Some(format!("captcha/check: {}", format_reqwest_err(&e)));
-                continue;
-            }
-        };
-        if !chk.status().is_success() {
-            last_err = Some(format!("captcha/check HTTP {}", chk.status()));
-            continue;
-        }
-        let chk_text = chk.text().await.unwrap_or_default();
-        let chk_json: Value = serde_json::from_str(&chk_text).unwrap_or(Value::Null);
-        let chk_ok = chk_json
-            .get("success")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false);
-        if chk_ok {
-            captcha_id = cap.id;
+            persist_downloaded_record(&app, out_path.as_path(), &job, written);
+            task.status = "completed".to_string();
+            task.progress = 1.0;
             info!(
-                target: "play-full",
-                "captcha ok attempt={} source_id={} drag_x={}",
-                attempt,
-                sid,
-                drag_x
+                target: "download",
+                "completed source_id={} path={}",
+                job.source_id,
+                out_path.display()
             );
-            break;
+            emit(task);
         }
-        warn!(
-            target: "play-full",
-            "captcha not passed attempt={} source_id={} drag_x={} body_len={}",
-            attempt,
-            sid,
-            drag_x,
-            chk_text.len()
-        );
-        last_err = Some(format!("验证未通过（x={drag_x}）"));
+        Err(e) => {
+            download_fail_emit(&mut task, &emit, &job, e);
+        }
     }
-
-    if captcha_id.is_empty() {
-        return Err(last_err.unwrap_or_else(|| "验证码校验失败".to_string()));
-    }
-
-    // 立刻换链接；TTL 很短。
-    let gap_ms = {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(150u64..350u64)
-    };
-    tokio::time::sleep(Duration::from_millis(gap_ms)).await;
-
-    let url_r = client
-        .get(format!("{}/captcha/check/getMusicUrl", base))
-        .query(&[
-            ("captchaId", captcha_id.as_str()),
-            ("id", sid),
-            ("br", br),
-        ])
-        .header("User-Agent", BROWSER_UA)
-        .header("Referer", song_page.as_str())
-        .send()
-        .await
-        .map_err(|e| format!("getMusicUrl: {}", format_reqwest_err(&e)))?;
-    if !url_r.status().is_success() {
-        return Err(format!("getMusicUrl HTTP {}", url_r.status()));
-    }
-    let url_json: Value = url_r
-        .json::<Value>()
-        .await
-        .map_err(|e| format!("解析 getMusicUrl JSON: {}", format_reqwest_err(&e)))?;
-    if url_json.get("code").and_then(|c| c.as_i64()) != Some(200) {
-        return Err(format!("getMusicUrl 业务失败: {url_json}"));
-    }
-    let music = url_json
-        .get("result")
-        .and_then(|r| r.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if music.is_empty() {
-        return Err("getMusicUrl 无 result URL".to_string());
-    }
-    info!(
-        target: "play-full",
-        "music url ready source_id={} br={} url_len={}",
-        sid,
-        br,
-        music.len()
-    );
-    Ok(music)
 }
 
-/// 流式下载音频到文件（不发 Tauri 事件、不计每日额度）。供在线播放的本地缓存复用。
+/// 流式下载音频到文件（不发 Tauri 事件、不计每日额度）。供 provider 实现内部复用。
 pub async fn stream_audio_to_file(
     client: &Client,
     music_url: &str,
     referer: &str,
     out_path: &Path,
 ) -> Result<u64, String> {
+    use futures_util::StreamExt;
+
     let resp = client
         .get(music_url)
-        .header("User-Agent", BROWSER_UA)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .header("Referer", referer)
         .send()
         .await

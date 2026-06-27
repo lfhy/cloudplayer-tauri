@@ -10,6 +10,7 @@ import {
   buildPlaylistImportItem,
   listPlaylistsCached,
   enqueueDownloadForTrack,
+  catalogIdFromRow,
 } from "./utils.js";
 import { saveQueueToSettings } from "./player.js";
 
@@ -141,7 +142,7 @@ export function buildDownloadSubmenu(track) {
 }
 
 /**
- * @param {{ title: string, artist: string, album?: string, sourceId?: string, source_id?: string, pjmp3_source_id?: string, coverUrl?: string | null, cover_url?: string | null, playUrl?: string, play_url?: string, durationMs?: number, duration_ms?: number }} t
+ * @param {{ title: string, artist: string, album?: string, sourceId?: string, source_id?: string, catalog_id?: string, coverUrl?: string | null, cover_url?: string | null, playUrl?: string, play_url?: string, durationMs?: number, duration_ms?: number }} t
  */
 export function buildAddToSubmenu(t) {
   const addRow = document.createElement("div");
@@ -301,7 +302,7 @@ export async function openSidebarPlaylistContextMenu(ev, pl) {
       }
       const pid = pl.id;
       appState.playQueue = rows.map((row) => ({
-        source_id: (row.pjmp3_source_id || "").trim(),
+        source_id: catalogIdFromRow(row),
         title: row.title,
         artist: row.artist || "",
         album: row.album || "",
@@ -379,7 +380,7 @@ export async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
     title: r.title,
     artist: r.artist,
     album: r.album,
-    sourceId: r.pjmp3_source_id,
+    sourceId: catalogIdFromRow(r),
     coverUrl: r.cover_url,
     durationMs: r.duration_ms,
   });
@@ -399,7 +400,7 @@ export async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
               title: r.title,
               artist: r.artist || "",
               album: r.album || "",
-              sourceId: r.pjmp3_source_id,
+              sourceId: catalogIdFromRow(r),
               coverUrl: r.cover_url || "",
               durationMs: r.duration_ms,
             }),
@@ -415,7 +416,7 @@ export async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
   root.appendChild(addRow);
 
   root.appendChild(
-    buildDownloadSubmenu({ sourceId: r.pjmp3_source_id, title: r.title, artist: r.artist })
+    buildDownloadSubmenu({ sourceId: catalogIdFromRow(r), title: r.title, artist: r.artist })
   );
   root.appendChild(cmBtn("分享", () => {}, true));
   root.appendChild(cmBtn("查看评论", () => {}, true));
@@ -426,7 +427,7 @@ export async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
         title: r.title,
         artist: r.artist,
         album: r.album,
-        sourceId: r.pjmp3_source_id,
+        sourceId: catalogIdFromRow(r),
         coverUrl: r.cover_url,
       })
     )
@@ -540,7 +541,7 @@ export async function openDownloadedSongRowContextMenu(ev, rowIdx) {
             title: r.title,
             artist: r.artist || "",
             album: r.album || "",
-            sourceId: r.pjmp3_source_id ?? r.pjmp3SourceId,
+            sourceId: catalogIdFromRow(r),
           }),
         ],
       });
@@ -564,7 +565,7 @@ export async function openDownloadedSongRowContextMenu(ev, rowIdx) {
               title: r.title,
               artist: r.artist || "",
               album: r.album || "",
-              sourceId: r.pjmp3_source_id ?? r.pjmp3SourceId,
+              sourceId: catalogIdFromRow(r),
             }),
           ],
         });
@@ -584,7 +585,7 @@ export async function openDownloadedSongRowContextMenu(ev, rowIdx) {
         title: r.title,
         artist: r.artist,
         album: r.album,
-        sourceId: r.pjmp3_source_id ?? r.pjmp3SourceId,
+        sourceId: catalogIdFromRow(r),
         coverUrl: null,
         localPath: r.file_path ?? r.filePath,
       })

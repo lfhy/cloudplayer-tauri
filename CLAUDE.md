@@ -42,8 +42,8 @@ npm run android:build:all-abis  # All Android ABIs
 | `config.rs` | `Settings` struct → `~/.cloudplayer/settings.json`, platform-specific paths, `BASE_URL` |
 | `db.rs` | SQLite schema (7 tables), migrations, CRUD operations |
 | `music_catalog/` | 在线曲库抽象层（`CatalogService` + `MusicCatalogProvider` trait） |
-| `music_catalog/providers/pjmp3_impl.rs` | Legacy pjmp3.com 搜索/试听（默认 `catalog_provider=none` 不启用） |
-| `download.rs` | Async download queue with captcha solving chain |
+| `music_catalog/providers/gequhai.rs` | gequhai.com 搜索/试听/下载 |
+| `download.rs` | Async download queue, delegates to provider trait |
 | `lyrics.rs` | Lyrics types, LRC/YRC/TTML parsing, Netease/LRCLIB APIs |
 | `lyric_replace.rs` | Multi-source lyric search (QQ/Kugou/Netease/LRCLIB) |
 | `lyric_qq.rs` | QQ Music lyrics with QRC decryption |
@@ -53,7 +53,6 @@ npm run android:build:all-abis  # All Android ABIs
 | `share_link.rs` | Netease/QQ Music share link → playlist conversion |
 | `import_playlist.rs` | Text/CSV/JSON playlist import parser |
 | `import_enrich.rs` | Background enrichment: resolve source IDs, cache covers |
-| `captcha_slider.rs` | tianai-captcha slider solver (Canny edge + template matching) |
 | `global_hotkeys.rs` | Desktop-only global shortcuts via `tauri-plugin-global-shortcut` |
 | `rate_limiter.rs` | Token bucket: 45 req/min sliding window |
 | `logging.rs` | File + stderr logging, panic hook |
@@ -76,8 +75,9 @@ Local library → downloaded tracks → download dir same-name file → preview 
 
 ### Online Catalog
 
-- `settings.json` → `catalog_provider`: `none` (default) | `pjmp3` (legacy, site down)
-- See [MUSIC_CATALOG.md](MUSIC_CATALOG.md) for module map and migration notes
+- `settings.json` → `catalog_provider`: `none` (default) | `gequhai` (歌曲海)
+- Architecture: `MusicCatalogProvider` trait + `CatalogService` facade
+- See [MUSIC_CATALOG.md](MUSIC_CATALOG.md) for module map and provider integration guide
 
 ### Lyrics Pipeline
 
@@ -85,7 +85,7 @@ Multi-source fallback: QQ Music (QRC encrypted) → Kugou (KRC encrypted) → Ne
 
 ## Key Dependencies
 
-- **Rust**: tauri 2, reqwest, rusqlite, tokio, amll-lyric, lofty, image/imageproc, scraper
+- **Rust**: tauri 2, reqwest, rusqlite, tokio, amll-lyric, lofty, scraper
 - **JS**: @tauri-apps/api v2, @tauri-apps/plugin-dialog, @tauri-apps/plugin-os
 - **Build**: Vite 6, @tauri-apps/cli v2
 

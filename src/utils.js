@@ -160,7 +160,7 @@ export function formatLoadingSubtitle(track) {
 /** @param {Record<string, unknown>} r */
 export function catalogIdFromRow(r) {
   return String(
-    r.source_id ?? r.sourceId ?? r.catalog_id ?? r.catalogId ?? r.pjmp3_source_id ?? r.pjmp3SourceId ?? "",
+    r.source_id ?? r.sourceId ?? r.catalog_id ?? r.catalogId ?? "",
   ).trim();
 }
 
@@ -173,7 +173,7 @@ export function catalogProviderFromRow(r) {
 
 /**
  * 发现搜索 / 导入歌单表格中「标题」列：标题 + 歌手；已下载曲目在歌手行右侧显示小字「已下载」。
- * @param {{ title?: string, artist?: string, source_id?: string, pjmp3_source_id?: string }} r
+ * @param {{ title?: string, artist?: string, source_id?: string, catalog_id?: string }} r
  * @param {{ titleFallback?: string }} [opts]
  */
 export function discoverPlaylistTitleCellHtml(r, opts = {}) {
@@ -243,11 +243,11 @@ export function downloadedSongRowToQueueItem(r) {
 }
 
 /**
- * @param {{ title?: string, artist?: string, album?: string, sourceId?: string, source_id?: string, pjmp3_source_id?: string, coverUrl?: string | null, cover_url?: string | null, playUrl?: string, play_url?: string, durationMs?: number, duration_ms?: number }} track
+ * @param {{ title?: string, artist?: string, album?: string, sourceId?: string, source_id?: string, catalog_id?: string, coverUrl?: string | null, cover_url?: string | null, playUrl?: string, play_url?: string, durationMs?: number, duration_ms?: number }} track
  */
 export function buildPlaylistImportItem(track = {}) {
   const sid = String(
-    track.sourceId ?? track.source_id ?? track.catalog_id ?? track.catalogId ?? track.pjmp3_source_id ?? "",
+    track.sourceId ?? track.source_id ?? track.catalog_id ?? track.catalogId ?? "",
   ).trim();
   const cover = String(track.coverUrl ?? track.cover_url ?? "").trim();
   const playUrl = String(track.playUrl ?? track.play_url ?? "").trim();

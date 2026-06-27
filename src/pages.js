@@ -19,6 +19,7 @@ import {
   listPlaylistsCached,
   buildPlaylistImportItem,
   refreshDownloadedSourceIdSet,
+  catalogIdFromRow,
 } from "./utils.js";
 import {
   openSearchRowContextMenu,
@@ -424,7 +425,7 @@ export function renderPlaylistDetailTable() {
 
   appState.playlistDetailRows.forEach((r, i) => {
     const tr = document.createElement("tr");
-    const sid = (r.pjmp3_source_id || "").trim();
+    const sid = catalogIdFromRow(r);
     const ok = !!sid;
     const cover = (r.cover_url || "").trim();
     const liked = ok && appState.likedIds.has(sid);
@@ -549,7 +550,7 @@ export function renderPlaylistBatchTable() {
   }
   appState.playlistDetailRows.forEach((r, i) => {
     const tr = document.createElement("tr");
-    const sid = (r.pjmp3_source_id || "").trim();
+    const sid = catalogIdFromRow(r);
     const dur = formatDurationMs(r.duration_ms);
     const cover = (r.cover_url || "").trim();
     const coverHtml = cover
@@ -589,7 +590,7 @@ async function runPlaylistBatchDownload() {
   for (const i of indices) {
     const r = appState.playlistDetailRows[i];
     if (!r) continue;
-    let sid = (r.pjmp3_source_id || "").trim();
+    let sid = catalogIdFromRow(r);
     if (!sid && pid != null && r.id) {
       try {
         const filled = await invoke("try_fill_playlist_item_source_id", {
@@ -598,7 +599,7 @@ async function runPlaylistBatchDownload() {
         });
         if (filled && String(filled).trim()) {
           sid = String(filled).trim();
-          r.pjmp3_source_id = sid;
+          r.catalog_id = sid;
         }
       } catch (e) {
         console.warn("batch try_fill", e);
@@ -812,7 +813,7 @@ export async function loadRecentPlaysFromDb() {
         return { title: r.title, artist: r.artist || "", local_path: fp };
       }
       return {
-        source_id: r.pjmp3SourceId || r.pjmp3_source_id || "",
+        source_id: catalogIdFromRow(r),
         title: r.title,
         artist: r.artist || "",
         cover_url: r.coverUrl ?? r.cover_url ?? null,
@@ -887,7 +888,7 @@ export async function refreshDownloadedSongsTable() {
     appState.downloadedSongsRows = Array.isArray(rows) ? rows : [];
     appState.downloadedSourceIds = new Set(
       appState.downloadedSongsRows
-        .map((r) => String(r.pjmp3SourceId ?? r.pjmp3_source_id ?? "").trim())
+        .map((r) => catalogIdFromRow(r))
         .filter(Boolean),
     );
     tbody.innerHTML = "";

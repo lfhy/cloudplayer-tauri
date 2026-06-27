@@ -9,7 +9,7 @@ use super::AppState;
 use crate::db::DbState;
 use crate::import_enrich;
 use crate::music_catalog::parse_catalog_id;
-use crate::music_catalog::PROVIDER_PJMP3;
+use crate::music_catalog::PROVIDER_NONE;
 
 #[derive(Debug, Deserialize)]
 pub struct ImportItemIn {
@@ -17,7 +17,7 @@ pub struct ImportItemIn {
     pub artist: String,
     #[serde(default)]
     pub album: String,
-    #[serde(default, alias = "pjmp3_source_id", alias = "pjmp3SourceId")]
+    #[serde(default, alias = "pjmp3_source_id", alias = "pjmp3SourceId", alias = "catalog_id", alias = "catalogId")]
     pub source_id: String,
     #[serde(default, alias = "coverUrl")]
     pub cover_url: String,
@@ -53,8 +53,8 @@ pub struct PlaylistImportItemRow {
     pub title: String,
     pub artist: String,
     pub album: String,
-    #[serde(alias = "catalog_id", alias = "catalogId")]
-    pub pjmp3_source_id: String,
+    #[serde(alias = "catalog_id", alias = "catalogId", alias = "pjmp3_source_id", alias = "pjmp3SourceId")]
+    pub catalog_id: String,
     #[serde(default)]
     pub catalog_provider: String,
     pub cover_url: String,
@@ -124,7 +124,7 @@ pub fn list_playlist_import_items(state: State<'_, DbState>, playlist_id: i64) -
                 title: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 artist: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
                 album: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                pjmp3_source_id: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                catalog_id: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 catalog_provider: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 cover_url: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
                 duration_ms: r.get(8)?,
@@ -174,7 +174,7 @@ pub fn delete_playlist_import_item(state: State<'_, DbState>, playlist_id: i64, 
 
 fn catalog_provider_for_item(source_id: &str) -> String {
     let parsed = parse_catalog_id(source_id);
-    if parsed.provider != PROVIDER_PJMP3 && !parsed.provider.is_empty() {
+    if parsed.provider != PROVIDER_NONE && !parsed.provider.is_empty() {
         parsed.provider
     } else {
         crate::music_catalog::CatalogService::active_provider_name()
@@ -243,4 +243,30 @@ pub async fn try_fill_playlist_item_source_id(app: AppHandle, state: State<'_, A
         import_enrich::spawn_playlist_enrich(app.clone(), playlist_id);
     }
     Ok(out)
+}
+
+/// 重新触发所有歌单的导入富化（用于曲库源切换后补充新 source_id）。
+#[tauri::command]
+pub fn re_enrich_all_playlists(app: AppHandle, state: State<'_, DbState>) -> Result<(), String> {
+    let ids: Vec<i64> = {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM playlists")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok(id) = row {
+                out.push(id);
+            }
+        }
+        out
+    };
+
+    for pid in ids {
+        import_enrich::spawn_playlist_enrich(app.clone(), pid);
+    }
+    Ok(())
 }

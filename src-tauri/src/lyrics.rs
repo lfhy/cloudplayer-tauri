@@ -41,7 +41,8 @@ pub(crate) fn netease_portal_headers() -> HeaderMap {
 pub struct LyricsFetchIn {
     /// 前端仍会带上；自动拉词已改走 LDDC 多源，不再使用曲库 id 拉词。
     #[allow(dead_code)]
-    pub pjmp3_source_id: Option<String>,
+    #[serde(alias = "pjmp3_source_id", alias = "pjmp3SourceId")]
+    pub catalog_id: Option<String>,
     pub title: String,
     pub artist: String,
     #[allow(dead_code)]

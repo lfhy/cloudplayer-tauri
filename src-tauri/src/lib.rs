@@ -1,4 +1,3 @@
-pub mod captcha_slider;
 mod commands;
 mod config;
 mod global_hotkeys;
@@ -16,7 +15,7 @@ mod qrc_des;
 mod lyric_qq;
 mod lyric_kugou;
 mod lyric_replace;
-mod music_catalog;
+pub mod music_catalog;
 mod rate_limiter;
 mod share_link;
 
@@ -96,15 +95,55 @@ pub fn run() {
                 conn: std::sync::Mutex::new(conn),
             });
 
-            let client = reqwest::Client::builder()
+            let mut client_builder = reqwest::Client::builder()
                 .timeout(Duration::from_secs(45))
                 .connect_timeout(Duration::from_secs(15))
                 .redirect(reqwest::redirect::Policy::limited(10))
                 // 部分站点在 HTTP/2 下偶发连接异常；与浏览器常见 HTTP/1.1 行为更一致。
                 .http1_only()
+                .cookie_store(true)
+                .danger_accept_invalid_certs(true)
+                .no_proxy()
                 .user_agent(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                )
+                );
+
+            // 非 localhost 的企业代理可显式启用；本地 Clash (127.0.0.1:7890) 不配置，
+            // 避免 reqwest auto_sys_proxy 自动走系统代理导致 gequhai 403/连接失败。
+            #[cfg(target_os = "windows")]
+            {
+                if let Ok(internet_settings) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+                    .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+                {
+                    let proxy_enable: u32 = internet_settings.get_value("ProxyEnable").unwrap_or(0);
+                    if proxy_enable != 0 {
+                        if let Ok(proxy_server) = internet_settings.get_value::<String, _>("ProxyServer") {
+                            let is_local_proxy = proxy_server.contains("127.0.0.1")
+                                || proxy_server.contains("localhost")
+                                || proxy_server.contains("[::1]");
+                            if !is_local_proxy {
+                                let proxy_url = if proxy_server.contains("://") {
+                                    proxy_server
+                                } else {
+                                    format!("http://{}", proxy_server)
+                                };
+                                if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+                                    let proxy = if let Some(no_proxy) = reqwest::NoProxy::from_string(
+                                        "gequhai.com,www.gequhai.com,.gequhai.com,localhost,127.0.0.1",
+                                    ) {
+                                        proxy.no_proxy(Some(no_proxy))
+                                    } else {
+                                        proxy
+                                    };
+                                    client_builder = client_builder.proxy(proxy);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let client = client_builder
                 .build()
                 .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))?;
 
@@ -212,6 +251,7 @@ pub fn run() {
             commands::playlist_cmd::delete_playlist,
             commands::playlist_cmd::delete_playlist_import_item,
             commands::playlist_cmd::replace_playlist_import_items,
+            commands::playlist_cmd::re_enrich_all_playlists,
             commands::playlist_cmd::append_playlist_import_items,
             commands::playlist_cmd::start_import_enrich,
             commands::playlist_cmd::try_fill_playlist_item_source_id,

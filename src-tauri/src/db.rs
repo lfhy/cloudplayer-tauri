@@ -141,7 +141,7 @@ pub fn insert_downloaded_track(
     album: &str,
     duration_ms: i64,
     file_size: i64,
-    pjmp3_source_id: &str,
+    catalog_id: &str,
     catalog_provider: &str,
     quality: &str,
     completed_at_ms: i64,
@@ -170,7 +170,7 @@ pub fn insert_downloaded_track(
             album,
             duration_ms,
             file_size,
-            pjmp3_source_id,
+            catalog_id,
             catalog_provider,
             quality,
             completed_at_ms,
@@ -214,8 +214,8 @@ pub struct DownloadedSongRow {
     pub album: String,
     pub duration_ms: i64,
     pub file_size: i64,
-    #[serde(alias = "catalogId", alias = "catalog_id")]
-    pub pjmp3_source_id: String,
+    #[serde(alias = "catalogId", alias = "catalog_id", alias = "pjmp3_source_id", alias = "pjmp3SourceId")]
+    pub catalog_id: String,
     #[serde(default)]
     pub catalog_provider: String,
     pub quality: String,
@@ -237,7 +237,7 @@ pub fn list_downloaded_tracks(conn: &Connection) -> rusqlite::Result<Vec<Downloa
             album: r.get(3)?,
             duration_ms: r.get(4)?,
             file_size: r.get(5)?,
-            pjmp3_source_id: r.get(6)?,
+            catalog_id: r.get(6)?,
             catalog_provider: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
             quality: r.get(8)?,
             completed_at: r.get(9)?,

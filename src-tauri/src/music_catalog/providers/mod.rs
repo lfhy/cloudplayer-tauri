@@ -1,4 +1,3 @@
-mod pjmp3;
-pub mod pjmp3_impl;
+mod gequhai;
 
-pub use pjmp3::Pjmp3Provider;
+pub use gequhai::GequhaiProvider;

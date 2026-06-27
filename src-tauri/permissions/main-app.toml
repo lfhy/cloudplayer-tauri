@@ -48,4 +48,5 @@ commands.allow = [
   "ensure_favorites_playlist",
   "add_to_favorites",
   "remove_from_favorites",
+  "re_enrich_all_playlists",
 ]
